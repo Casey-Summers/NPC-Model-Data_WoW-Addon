@@ -44,13 +44,21 @@ local ModelViewer = {
     _namesIndexBuilt = false,
     _nameIndex = nil, -- array: { {name="X", lower="x"} ... }
     _pendingSuggestToken = 0,
-    lookup = nil      -- runtime lookup for DB
+    lookup = nil,     -- runtime lookup for DB
+
+    -- Browsing state
+    _curGlobalIdx = 0,
+    _curNpcIds = {},
+    _curNpcIdx = 0,
+    _curDispIds = {},
+    _curDispIdx = 0,
+    _lastSearchName = ""
 }
 
 -- =========================================================
 -- Local Harvest DB (SavedVariables)
 -- =========================================================
-local DB_VERSION = 3
+local DB_VERSION = 5
 local BATCH_ID_RANGE = 1000
 
 local function HarvestKey(npcId, displayId)
@@ -59,11 +67,11 @@ end
 
 local function GetBatchLabel(npcId)
     local startRange = math.floor(npcId / BATCH_ID_RANGE) * BATCH_ID_RANGE
-    return ("IDs %d - %d"):format(startRange, startRange + BATCH_ID_RANGE - 1)
+    return ("Display IDs %d - %d"):format(startRange, startRange + BATCH_ID_RANGE - 1)
 end
 
 local function GetEntryLabel(name, npcId, displayId)
-    return ("%s - %d:%d"):format(name or "Unknown", npcId, displayId)
+    return ("%d - %s"):format(npcId, name or "Unknown")
 end
 
 local function EnsureHarvestDB()
@@ -76,40 +84,41 @@ local function EnsureHarvestDB()
     NPCModelViewerDB.meta.version = DB_VERSION
     NPCModelViewerDB.meta.importedCreatureDisplayDB = NPCModelViewerDB.meta.importedCreatureDisplayDB or false
 
-    -- Batched storage (v3): batches = { ["IDs 0 - 999"] = { ["Name - 123:456"] = {NPC_Name, NPC_ID, Display_ID}, ... }, ... }
-    if not NPCModelViewerDB.batches or oldVersion < 3 then
-        local oldBatches = NPCModelViewerDB.batches
-        local oldEntries = NPCModelViewerDB.entriesByKey
-        NPCModelViewerDB.entriesByKey = nil
-        NPCModelViewerDB.batches = {}
-        NPCModelViewerDB.count = 0
-        ModelViewer.lookup = {} -- Force lookup rebuild
+    NPCModelViewerDB.knownIds = NPCModelViewerDB.knownIds or {}
+    NPCModelViewerDB.discoveredIds = NPCModelViewerDB.discoveredIds or {}
 
-        -- Migration logic
+    -- Migration to v5 (Rename batches to displayIdBatches, "Display IDs" labels)
+    if not NPCModelViewerDB.displayIdBatches or oldVersion < 5 then
+        local oldBatches = NPCModelViewerDB.batches or NPCModelViewerDB.displayIdBatches
+        NPCModelViewerDB.displayIdBatches = {}
+        NPCModelViewerDB.batches = nil
+        NPCModelViewerDB.count = 0
+        ModelViewer.lookup = {}
+
         local function MigrateEntry(entry)
             local name = entry.NPC_Name or entry.name or "Unknown"
-            local id = entry.NPC_ID or entry.npcId
-            local did = entry.Display_ID or entry.displayId
+            local id = tonumber(entry.NPC_ID or entry.npcId)
+            local did = tonumber(entry.Display_ID or entry.displayId)
             if id and did then
                 local bLabel = GetBatchLabel(id)
                 local eLabel = GetEntryLabel(name, id, did)
-                NPCModelViewerDB.batches[bLabel] = NPCModelViewerDB.batches[bLabel] or {}
-                if not NPCModelViewerDB.batches[bLabel][eLabel] then
-                    NPCModelViewerDB.batches[bLabel][eLabel] = {
+                NPCModelViewerDB.displayIdBatches[bLabel] = NPCModelViewerDB.displayIdBatches[bLabel] or {}
+                if not NPCModelViewerDB.displayIdBatches[bLabel][eLabel] then
+                    NPCModelViewerDB.displayIdBatches[bLabel][eLabel] = {
                         NPC_Name = name,
                         NPC_ID = id,
                         Display_ID = did
                     }
                     NPCModelViewerDB.count = NPCModelViewerDB.count + 1
                     local key = HarvestKey(id, did)
-                    ModelViewer.lookup[key] = NPCModelViewerDB.batches[bLabel][eLabel]
+                    ModelViewer.lookup[key] = NPCModelViewerDB.displayIdBatches[bLabel][eLabel]
+
+                    NPCModelViewerDB.knownIds[id] = true
+                    NPCModelViewerDB.knownIds[did] = true
                 end
             end
         end
 
-        if oldEntries then
-            for _, entry in pairs(oldEntries) do MigrateEntry(entry) end
-        end
         if oldBatches then
             for _, batch in pairs(oldBatches) do
                 for _, entry in pairs(batch) do MigrateEntry(entry) end
@@ -117,10 +126,10 @@ local function EnsureHarvestDB()
         end
     end
 
-    -- Runtime lookup (not saved)
+    -- Runtime lookup
     if not ModelViewer.lookup then
         ModelViewer.lookup = {}
-        for _, batch in pairs(NPCModelViewerDB.batches) do
+        for _, batch in pairs(NPCModelViewerDB.displayIdBatches) do
             for _, entry in pairs(batch) do
                 local key = HarvestKey(entry.NPC_ID, entry.Display_ID)
                 ModelViewer.lookup[key] = entry
@@ -160,34 +169,54 @@ local function AddHarvestEntry(npcName, npcId, displayId, sourceLabel)
         local bLabel = GetBatchLabel(npcId)
         local eLabel = GetEntryLabel(npcName, npcId, displayId)
 
-        db.batches[bLabel] = db.batches[bLabel] or {}
+        db.displayIdBatches[bLabel] = db.displayIdBatches[bLabel] or {}
         local newEntry = {
             NPC_Name = npcName or "Unknown",
             NPC_ID = npcId,
             Display_ID = displayId
         }
-        db.batches[bLabel][eLabel] = newEntry
+        db.displayIdBatches[bLabel][eLabel] = newEntry
         db.count = (db.count or 0) + 1
         ModelViewer.lookup[key] = newEntry
+
+        db.knownIds[npcId] = true
+        db.knownIds[displayId] = true
+
+        if sourceLabel == "hover" or sourceLabel == "target" then
+            db.discoveredIds[npcId] = true
+            db.discoveredIds[displayId] = true
+            newEntry.isDiscovered = true
+            NPCMV_Print("|cffffff00New Discovery!|r", (npcName or "Unknown"), "(NPC:", npcId, "Display:", displayId, ")")
+        end
+
+        -- Invalidate navigation indices
+        ModelViewer._indicesBuilt = false
     end
 
     return true, isNew
 end
 
 local function ParseNpcIdFromGuid(guid)
-    if not guid or guid == "" then
-        return nil
-    end
-    -- Creature-0-0000-0000-0000-<npcId>-0000000000
-    local unitType, _, _, _, _, npcId = strsplit("-", guid)
-    if unitType ~= "Creature" and unitType ~= "Vehicle" and unitType ~= "Pet" then
-        return nil
-    end
-    npcId = tonumber(npcId)
-    if not npcId or npcId <= 0 then
-        return nil
-    end
-    return npcId
+    if not guid then return nil end
+
+    local ok, npcId = pcall(function()
+        if guid == "" then return nil end
+
+        -- Creature-0-0000-0000-0000-<NPCID>-0000000000
+        -- Vehicle-0-0000-0000-0000-<NPCID>-0000000000
+        local unitType, _, _, _, _, id = strsplit("-", guid)
+        if unitType ~= "Creature" and unitType ~= "Vehicle" then
+            return nil
+        end
+
+        local numId = tonumber(id)
+        if not numId or numId <= 0 then
+            return nil
+        end
+        return numId
+    end)
+
+    return ok and npcId or nil
 end
 
 local function ImportFromCreatureDisplayDBIfNeeded()
@@ -200,49 +229,31 @@ local function ImportFromCreatureDisplayDBIfNeeded()
     end
 
     local imported = 0
-    local skipped = 0
-
-    -- Seed only (DB2-derived addon may be incomplete; hover harvesting is the real source of truth)
+    -- Iterate unique names in lib
     for npcName, _ in pairs(CreatureDisplayDBdb.byname) do
-        local npcIds = CreatureDisplayDB:GetNpcIdsByName(npcName)
-        if npcIds and #npcIds > 0 then
-            for _, npcId in ipairs(npcIds) do
-                local displayIds = CreatureDisplayDB:GetDisplayIdsByNpcId(npcId)
-                if displayIds and #displayIds > 0 then
-                    for _, displayId in ipairs(displayIds) do
-                        local ok, isNew = AddHarvestEntry(npcName, npcId, displayId, "CreatureDisplayDB")
-                        if ok and isNew then
-                            imported = imported + 1
-                        else
-                            skipped = skipped + 1
-                        end
-                    end
-                else
-                    skipped = skipped + 1
-                end
+        local allNpcIds = CreatureDisplayDB:GetNpcIdsByName(npcName) or {}
+        local allDispIds = CreatureDisplayDB:GetDisplayIdsByName(npcName) or {}
+
+        -- Since AddHarvestEntry works with pairs, we ensure every NPC_ID
+        -- mentioned for this name is registered with at least the first DisplayID,
+        -- and every DisplayID is registered with the first NPC_ID.
+        local firstNpcId = allNpcIds[1]
+        local firstDispId = allDispIds[1]
+
+        if firstNpcId and firstDispId then
+            -- Cross-pollinate
+            for _, dId in ipairs(allDispIds) do
+                local ok, isNew = AddHarvestEntry(npcName, firstNpcId, dId, "CreatureDisplayDB")
+                if ok and isNew then imported = imported + 1 end
             end
-        else
-            -- fallback: DisplayID -> data -> npcId (if library provides it)
-            local displayIds = CreatureDisplayDB:GetDisplayIdsByName(npcName)
-            if displayIds and #displayIds > 0 then
-                for _, displayId in ipairs(displayIds) do
-                    local data = CreatureDisplayDB:GetCreatureDisplayDataByDisplayId(displayId)
-                    local npcId = data and (data.npcId or data.NPCID or data.id) or nil
-                    local ok, isNew = (npcId and AddHarvestEntry(npcName, npcId, displayId, "CreatureDisplayDB"))
-                    if ok and isNew then
-                        imported = imported + 1
-                    else
-                        skipped = skipped + 1
-                    end
-                end
-            else
-                skipped = skipped + 1
+            for _, nId in ipairs(allNpcIds) do
+                AddHarvestEntry(npcName, nId, firstDispId, "CreatureDisplayDB")
             end
         end
     end
 
     db.meta.importedCreatureDisplayDB = true
-    NPCMV_Print("Seeded local DB from CreatureDisplayDB:", imported, "new entries (skipped:", skipped .. ")")
+    NPCMV_Print("Imported", imported, "entries from CreatureDisplayDB.")
 end
 
 local function ExportHarvestCsv()
@@ -251,9 +262,11 @@ local function ExportHarvestCsv()
     lines[#lines + 1] = "NPC_Name,NPC_ID,Display_ID"
 
     local entries = {}
-    for _, batch in pairs(db.batches) do
+    for _, batch in pairs(db.displayIdBatches) do
         for _, entry in pairs(batch) do
-            entries[#entries + 1] = entry
+            if entry.isDiscovered then
+                entries[#entries + 1] = entry
+            end
         end
     end
 
@@ -398,14 +411,13 @@ function ModelViewer:Ensure()
     end
 
     local frame = CreateFrame("Frame", "NPCModelViewerFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(620, 750)
+    frame:SetSize(620, 715)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
     frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:SetClipsChildren(true)
     frame:Hide()
 
     frame:SetBackdrop({
@@ -446,6 +458,33 @@ function ModelViewer:Ensure()
     export:SetSize(80, 24)
     export:SetPoint("LEFT", go, "RIGHT", 6, 0)
     export:SetText("Export")
+
+    -- Global Navigation (Outside)
+    local function CreateAtlasButton(parent, atlas, xOff, flipX)
+        local btn = CreateFrame("Button", nil, parent)
+        btn:SetSize(32, 32)
+        local tex = btn:CreateTexture(nil, "ARTWORK")
+        tex:SetAllPoints()
+        tex:SetAtlas(atlas)
+        tex:SetVertexColor(1, 0.8, 0)
+        if flipX then tex:SetTexCoord(1, 0, 0, 1) end
+        btn:SetNormalTexture(tex)
+        local high = btn:CreateTexture(nil, "HIGHLIGHT")
+        high:SetAllPoints()
+        high:SetAtlas(atlas)
+        high:SetVertexColor(1, 0.8, 0)
+        high:SetBlendMode("ADD")
+        if flipX then high:SetTexCoord(1, 0, 0, 1) end
+        return btn
+    end
+
+    local gPrev = CreateAtlasButton(frame, "shop-header-arrow-disabled", -8, false)
+    gPrev:SetPoint("RIGHT", frame, "LEFT", -8, 0)
+    gPrev:SetScript("OnClick", function() self:PrevGlobal() end)
+
+    local gNext = CreateAtlasButton(frame, "shop-header-arrow-disabled", 8, true)
+    gNext:SetPoint("LEFT", frame, "RIGHT", 8, 0)
+    gNext:SetScript("OnClick", function() self:NextGlobal() end)
 
     -- Suggestions dropdown
     local suggest = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -495,10 +534,10 @@ function ModelViewer:Ensure()
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
 
-    -- Subsection
+    -- Subsection (Subcontext frame)
     local infoBox = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -10)
-    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -25, 45)
+    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -25, 10)
     infoBox:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -507,30 +546,133 @@ function ModelViewer:Ensure()
     infoBox:SetBackdropColor(0.08, 0.08, 0.08, 0.6)
     infoBox:SetBackdropBorderColor(1, 1, 1, 0.1)
 
-    local infoTitle = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    infoTitle:SetPoint("TOPLEFT", 10, -8)
-    infoTitle:SetText("NPC DETAILS")
-    infoTitle:SetTextColor(0.5, 0.5, 0.5)
+    -- 1. Name top center
+    local nameLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    nameLabel:SetPoint("TOP", infoBox, "TOP", 0, -15)
+    nameLabel:SetText("-")
+    self.nameLabel = nameLabel
 
-    local function CreateInfoLabel(parent, labelText, yOffset)
-        local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        lbl:SetPoint("TOPLEFT", 15, yOffset)
-        lbl:SetText(labelText)
-        lbl:SetTextColor(0.6, 0.6, 0.6)
+    -- 4. Warning Label (Under name)
+    self.warningLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    self.warningLabel:SetPoint("TOP", nameLabel, "BOTTOM", 0, -2)
+    self.warningLabel:SetTextColor(1, 0.2, 0.2)
+    self.warningLabel:SetText("")
 
-        local val = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        val:SetPoint("LEFT", lbl, "RIGHT", 10, 0)
-        val:SetText("-")
-        return val
-    end
+    -- 2. Left Side: NPC ID
+    local npcCont = CreateFrame("Frame", nil, infoBox)
+    npcCont:SetSize(220, 120)
+    npcCont:SetPoint("TOPLEFT", 10, -35)
 
-    self.nameLabel = CreateInfoLabel(infoBox, "NAME:", -30)
-    self.npcIdLabel = CreateInfoLabel(infoBox, "NPC ID:", -52)
-    self.displayIdLabel = CreateInfoLabel(infoBox, "DISPLAY ID:", -74)
+    local npcLabel = npcCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    npcLabel:SetPoint("TOP", 0, 0)
+    npcLabel:SetText("NPC ID")
+    npcLabel:SetTextColor(0.5, 0.5, 0.5)
 
-    local status = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    status:SetPoint("BOTTOM", frame, "BOTTOM", 0, 20)
-    status:SetText("")
+    local npcValue = npcCont:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    npcValue:SetPoint("TOP", npcLabel, "BOTTOM", 0, -4)
+    npcValue:SetText("-")
+    self.npcIdLabel = npcValue
+
+    local nPrev = CreateFrame("Button", nil, npcCont)
+    nPrev:SetSize(24, 24)
+    nPrev:SetPoint("TOPRIGHT", npcCont, "TOP", -22, -45)
+    local nPrevTex = nPrev:CreateTexture(nil, "ARTWORK")
+    nPrevTex:SetAllPoints()
+    nPrevTex:SetAtlas("shop-header-arrow-disabled")
+    nPrevTex:SetVertexColor(1, 0.8, 0)
+    -- points RIGHT
+    nPrev:SetNormalTexture(nPrevTex)
+    local nPrevHigh = nPrev:CreateTexture(nil, "HIGHLIGHT")
+    nPrevHigh:SetAllPoints()
+    nPrevHigh:SetAtlas("shop-header-arrow-disabled")
+    nPrevHigh:SetVertexColor(1, 0.8, 0)
+    nPrevHigh:SetBlendMode("ADD")
+    nPrev:SetScript("OnClick", function() self:PrevNpc() end)
+
+    local nNext = CreateFrame("Button", nil, npcCont)
+    nNext:SetSize(24, 24)
+    nNext:SetPoint("TOPLEFT", npcCont, "TOP", 22, -45)
+    local nNextTex = nNext:CreateTexture(nil, "ARTWORK")
+    nNextTex:SetAllPoints()
+    nNextTex:SetAtlas("shop-header-arrow-disabled")
+    nNextTex:SetVertexColor(1, 0.8, 0)
+    nNextTex:SetTexCoord(1, 0, 0, 1) -- points LEFT
+    nNext:SetNormalTexture(nNextTex)
+    local nNextHigh = nNext:CreateTexture(nil, "HIGHLIGHT")
+    nNextHigh:SetAllPoints()
+    nNextHigh:SetAtlas("shop-header-arrow-disabled")
+    nNextHigh:SetVertexColor(1, 0.8, 0)
+    nNextHigh:SetTexCoord(1, 0, 0, 1)
+    nNextHigh:SetBlendMode("ADD")
+    nNext:SetScript("OnClick", function() self:NextNpc() end)
+
+    local npcCounter = npcCont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    npcCounter:SetPoint("TOP", npcCont, "TOP", 0, -48)
+    npcCounter:SetText("0/0")
+    self.npcCounter = npcCounter
+
+    local npcDesc = npcCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    npcDesc:SetPoint("TOP", 0, -85)
+    npcDesc:SetText("Flick through same-name IDs")
+    npcDesc:SetScale(0.8)
+
+    -- 2. Right Side: Display ID
+    local dispCont = CreateFrame("Frame", nil, infoBox)
+    dispCont:SetSize(220, 120)
+    dispCont:SetPoint("TOPRIGHT", -10, -35)
+
+    local dispLabel = dispCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    dispLabel:SetPoint("TOP", 0, 0)
+    dispLabel:SetText("DISPLAY ID")
+    dispLabel:SetTextColor(0.5, 0.5, 0.5)
+
+    local dispValue = dispCont:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    dispValue:SetPoint("TOP", dispLabel, "BOTTOM", 0, -4)
+    dispValue:SetText("-")
+    self.displayIdLabel = dispValue
+
+    local dPrev = CreateFrame("Button", nil, dispCont)
+    dPrev:SetSize(24, 24)
+    dPrev:SetPoint("TOPRIGHT", dispCont, "TOP", -22, -45)
+    local dPrevTex = dPrev:CreateTexture(nil, "ARTWORK")
+    dPrevTex:SetAllPoints()
+    dPrevTex:SetAtlas("shop-header-arrow-disabled")
+    dPrevTex:SetVertexColor(1, 0.8, 0)
+    -- points RIGHT
+    dPrev:SetNormalTexture(dPrevTex)
+    local dPrevHigh = dPrev:CreateTexture(nil, "HIGHLIGHT")
+    dPrevHigh:SetAllPoints()
+    dPrevHigh:SetAtlas("shop-header-arrow-disabled")
+    dPrevHigh:SetVertexColor(1, 0.8, 0)
+    dPrevHigh:SetBlendMode("ADD")
+    dPrev:SetScript("OnClick", function() self:PrevDisp() end)
+
+    local dNext = CreateFrame("Button", nil, dispCont)
+    dNext:SetSize(24, 24)
+    dNext:SetPoint("TOPLEFT", dispCont, "TOP", 22, -45)
+    local dNextTex = dNext:CreateTexture(nil, "ARTWORK")
+    dNextTex:SetAllPoints()
+    dNextTex:SetAtlas("shop-header-arrow-disabled")
+    dNextTex:SetVertexColor(1, 0.8, 0)
+    dNextTex:SetTexCoord(1, 0, 0, 1) -- points LEFT
+    dNext:SetNormalTexture(dNextTex)
+    local dNextHigh = dNext:CreateTexture(nil, "HIGHLIGHT")
+    dNextHigh:SetAllPoints()
+    dNextHigh:SetAtlas("shop-header-arrow-disabled")
+    dNextHigh:SetVertexColor(1, 0.8, 0)
+    dNextHigh:SetTexCoord(1, 0, 0, 1)
+    dNextHigh:SetBlendMode("ADD")
+    dNext:SetScript("OnClick", function() self:NextDisp() end)
+
+    local dispCounter = dispCont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    dispCounter:SetPoint("TOP", dispCont, "TOP", 0, -48)
+    dispCounter:SetText("0/0")
+    self.dispCounter = dispCounter
+
+    local dispDesc = dispCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    dispDesc:SetPoint("TOP", 0, -85)
+    dispDesc:SetText("Flick through NPC variations")
+    dispDesc:SetScale(0.8)
 
     self.frame = frame
     self.title = title
@@ -538,10 +680,175 @@ function ModelViewer:Ensure()
     self.go = go
     self.export = export
     self.model = model
-    self.status = status
     self.suggest = suggest
     self.suggestButtons = suggestButtons
     self.MAX_SUGGEST = MAX_SUGGEST
+
+    self.npcPrev = nPrev
+    self.npcNext = nNext
+    self.dispPrev = dPrev
+    self.dispNext = dNext
+end
+
+function ModelViewer:SyncState()
+    local name = self._lastSearchName or "-"
+    local npcId = self._curNpcIds[self._curNpcIdx] or "-"
+    local dispId = self._curDispIds[self._curDispIdx] or "-"
+
+    self:UpdateDetails(name, npcId, dispId)
+
+    -- Update Counters
+    local npcCount = #self._curNpcIds
+    local npcIdx = self._curNpcIdx
+    if npcCount == 0 then npcIdx = 0 end
+    self.npcCounter:SetText(("%d/%d"):format(npcIdx, npcCount))
+    self.npcPrev:SetShown(npcCount > 1)
+    self.npcNext:SetShown(npcCount > 1)
+
+    local dispCount = #self._curDispIds
+    local dispIdx = self._curDispIdx
+    if dispCount == 0 then dispIdx = 0 end
+    self.dispCounter:SetText(("%d/%d"):format(dispIdx, dispCount))
+    self.dispPrev:SetShown(dispCount > 1)
+    self.dispNext:SetShown(dispCount > 1)
+
+    -- Handle Lack of IDs or Visuals
+    local warning = ""
+    if dispCount == 0 and (npcId ~= "-" or name ~= "-") then
+        warning = "Warning: No Display IDs found"
+    elseif npcId == "-" and dispId == "-" and name ~= "-" then
+        warning = "Warning: Entry found but no IDs available"
+    end
+    self.warningLabel:SetText(warning)
+
+    if dispId ~= "-" and dispId ~= self._lastDisplayedId then
+        self.model:SetDisplayInfo(dispId)
+        self._lastDisplayedId = dispId
+    elseif dispId == "-" then
+        self.model:ClearModel()
+        self._lastDisplayedId = nil
+    end
+end
+
+function ModelViewer:UpdateDispListForNpc(npcId)
+    -- Aggregate ALL Display IDs for the current NPC NAME
+    local name = self._lastSearchName
+    if not name or name == "-" or name == "" then
+        -- No name context: Fallback to IDs just for this NPC_ID
+        self._curDispIds = {}
+        if npcId and npcId ~= "-" then
+            if IsCreatureDisplayDBAvailable() then
+                self._curDispIds = CreatureDisplayDB:GetDisplayIdsByNpcId(npcId) or {}
+            end
+            local db = EnsureHarvestDB()
+            local seen = {}
+            for _, d in ipairs(self._curDispIds) do seen[d] = true end
+            for _, b in pairs(db.displayIdBatches) do
+                for _, e in pairs(b) do
+                    if e.NPC_ID == npcId and not seen[e.Display_ID] then
+                        table.insert(self._curDispIds, e.Display_ID)
+                        seen[e.Display_ID] = true
+                    end
+                end
+            end
+        end
+        table.sort(self._curDispIds)
+        self._curDispIdx = #self._curDispIds > 0 and 1 or 0
+        return
+    end
+
+    local ids = {}
+    local seen = {}
+
+    -- 1) Lib
+    if IsCreatureDisplayDBAvailable() then
+        local dids = CreatureDisplayDB:GetDisplayIdsByName(name)
+        if dids then
+            for _, did in ipairs(dids) do
+                if not seen[did] then
+                    table.insert(ids, did)
+                    seen[did] = true
+                end
+            end
+        end
+    end
+
+    -- 2) Harvested
+    local db = EnsureHarvestDB()
+    local lowered = ToLowerSafe(name)
+    for _, batch in pairs(db.displayIdBatches) do
+        for _, entry in pairs(batch) do
+            if ToLowerSafe(entry.NPC_Name) == lowered then
+                local did = tonumber(entry.Display_ID)
+                if did and not seen[did] then
+                    table.insert(ids, did)
+                    seen[did] = true
+                end
+            end
+        end
+    end
+
+    table.sort(ids)
+    self._curDispIds = ids
+
+    -- Maintain current Display ID if it's still in the list
+    local oldDid = self._curDispIds[self._curDispIdx]
+    if oldDid then
+        for i, id in ipairs(ids) do
+            if id == oldDid then
+                self._curDispIdx = i
+                return
+            end
+        end
+    end
+    self._curDispIdx = #ids > 0 and 1 or 0
+end
+
+function ModelViewer:NextGlobal()
+    self:BuildGlobalIdIndexIfNeeded()
+    if not self._idIndex or #self._idIndex == 0 then return end
+    self._curGlobalIdx = (self._curGlobalIdx % #self._idIndex) + 1
+    local npcId = self._idIndex[self._curGlobalIdx]
+    self.input:SetText(tostring(npcId))
+    self:ApplyNumeric(npcId)
+end
+
+function ModelViewer:PrevGlobal()
+    self:BuildGlobalIdIndexIfNeeded()
+    if not self._idIndex or #self._idIndex == 0 then return end
+    self._curGlobalIdx = self._curGlobalIdx - 1
+    if self._curGlobalIdx < 1 then self._curGlobalIdx = #self._idIndex end
+    local npcId = self._idIndex[self._curGlobalIdx]
+    self.input:SetText(tostring(npcId))
+    self:ApplyNumeric(npcId)
+end
+
+function ModelViewer:NextNpc()
+    if #self._curNpcIds <= 1 then return end
+    self._curNpcIdx = (self._curNpcIdx % #self._curNpcIds) + 1
+    self:UpdateDispListForNpc(self._curNpcIds[self._curNpcIdx])
+    self:SyncState()
+end
+
+function ModelViewer:PrevNpc()
+    if #self._curNpcIds <= 1 then return end
+    self._curNpcIdx = self._curNpcIdx - 1
+    if self._curNpcIdx < 1 then self._curNpcIdx = #self._curNpcIds end
+    self:UpdateDispListForNpc(self._curNpcIds[self._curNpcIdx])
+    self:SyncState()
+end
+
+function ModelViewer:NextDisp()
+    if #self._curDispIds <= 1 then return end
+    self._curDispIdx = (self._curDispIdx % #self._curDispIds) + 1
+    self:SyncState()
+end
+
+function ModelViewer:PrevDisp()
+    if #self._curDispIds <= 1 then return end
+    self._curDispIdx = self._curDispIdx - 1
+    if self._curDispIdx < 1 then self._curDispIdx = #self._curDispIds end
+    self:SyncState()
 end
 
 function ModelViewer:Show()
@@ -557,12 +864,7 @@ end
 
 function ModelViewer:ResetVisuals()
     self.model:ClearModel()
-    self.status:SetText("")
     self:UpdateDetails("-", "-", "-")
-end
-
-function ModelViewer:SetStatus(text)
-    self.status:SetText(text or "")
 end
 
 function ModelViewer:UpdateDetails(name, npcId, displayId)
@@ -573,57 +875,71 @@ function ModelViewer:UpdateDetails(name, npcId, displayId)
 end
 
 -- =========================================================
--- Suggestions / autocomplete
+-- Global Indices (Names for suggestions, IDs for navigation)
 -- =========================================================
-function ModelViewer:BuildNameIndexIfNeeded()
-    if self._namesIndexBuilt then
+function ModelViewer:BuildGlobalIndicesIfNeeded()
+    if self._indicesBuilt then
         return
     end
-    self._namesIndexBuilt = true
+    self._indicesBuilt = true
+    self._namesIndexBuilt = true -- Sync old flag
 
     self._nameIndex = {}
-    local seen = {}
+    self._idIndex = {}
+    local seenName = {}
+    local seenId = {}
 
-    -- 1) CreatureDisplayDB (if present)
+    local function Collect(name, npcId)
+        if name then
+            local lower = ToLowerSafe(name)
+            if lower ~= "" and not seenName[lower] then
+                seenName[lower] = true
+                table.insert(self._nameIndex, { name = name, lower = lower })
+            end
+        end
+        if npcId and npcId > 0 then
+            if not seenId[npcId] then
+                seenId[npcId] = true
+                table.insert(self._idIndex, npcId)
+            end
+        end
+    end
+
+    -- 1) Lib
     if IsCreatureDisplayDBAvailable() then
-        for npcName, _ in pairs(CreatureDisplayDBdb.byname) do
-            local lower = ToLowerSafe(npcName)
-            if lower ~= "" and not seen[lower] then
-                seen[lower] = true
-                table.insert(self._nameIndex, {
-                    name = npcName,
-                    lower = lower
-                })
+        for name, _ in pairs(CreatureDisplayDBdb.byname) do
+            local ids = CreatureDisplayDB:GetNpcIdsByName(name)
+            if ids then
+                for _, id in ipairs(ids) do Collect(name, id) end
+            else
+                Collect(name, nil)
             end
         end
     end
 
-    -- 2) Our harvested DB (always)
+    -- 2) Local
     local db = EnsureHarvestDB()
-    for _, batch in pairs(db.batches) do
+    for _, batch in pairs(db.displayIdBatches) do
         for _, entry in pairs(batch) do
-            local npcName = entry and entry.NPC_Name or nil
-            local lower = ToLowerSafe(npcName)
-            if lower ~= "" and not seen[lower] then
-                seen[lower] = true
-                table.insert(self._nameIndex, {
-                    name = npcName,
-                    lower = lower
-                })
-            end
+            Collect(entry.NPC_Name, entry.NPC_ID)
         end
     end
 
-    if #self._nameIndex == 0 then
-        NPCMV_Print("No name index available yet. Hover NPCs to harvest names, or install CreatureDisplayDB.")
-        return
-    end
-
-    table.sort(self._nameIndex, function(a, b)
-        return a.lower < b.lower
-    end)
+    table.sort(self._nameIndex, function(a, b) return a.lower < b.lower end)
+    table.sort(self._idIndex)
 end
 
+function ModelViewer:BuildNameIndexIfNeeded()
+    self:BuildGlobalIndicesIfNeeded()
+end
+
+function ModelViewer:BuildGlobalIdIndexIfNeeded()
+    self:BuildGlobalIndicesIfNeeded()
+end
+
+-- =========================================================
+-- Suggestions / autocomplete
+-- =========================================================
 function ModelViewer:HideSuggestions()
     self.suggest:Hide()
     for index = 1, self.MAX_SUGGEST do
@@ -811,161 +1127,183 @@ function ModelViewer:ApplyInput()
 end
 
 function ModelViewer:ApplyNumeric(numberValue)
-    self:SetStatus("Loading: " .. tostring(numberValue))
+    local foundName = nil
 
-    local didTried = false
-
+    -- Tie back to name if possible
     if IsCreatureDisplayDBAvailable() then
-        local asNpc = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
-        if asNpc then
-            local displayIds = CreatureDisplayDB:GetDisplayIdsByNpcId(numberValue)
-            if displayIds and #displayIds > 0 then
-                self:TryIdSequence("Numeric->NPC_ID->DisplayIDs(SetDisplayInfo)", displayIds, function(model, id)
-                    model:SetDisplayInfo(id)
-                end, function(ok, chosenId)
-                    if ok then
-                        local name = asNpc.name or asNpc.NPC_Name or tostring(numberValue)
-                        self:UpdateDetails(name, numberValue, chosenId)
-                        self:SetStatus("Success (NPC_ID)")
-                    else
-                        self.model:ClearModel()
-                        self.model:SetCreature(numberValue)
-                        NPCMV_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
-                        self:UpdateDetails(asNpc.name or tostring(numberValue), numberValue, "-")
-                        self:SetStatus("Success (NPC_ID Fallback)")
-                    end
-                end)
-                return
-            end
-
-            self.model:ClearModel()
-            self.model:SetCreature(numberValue)
-            NPCMV_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
-            self:UpdateDetails(asNpc.name or tostring(numberValue), numberValue, "-")
-            self:SetStatus("Success (NPC_ID)")
-            return
-        end
-
-        local asDid = CreatureDisplayDB:GetCreatureDisplayDataByDisplayId(numberValue)
-        if asDid then
-            self.model:ClearModel()
-            self.model:SetDisplayInfo(numberValue)
-            NPCMV_Print("SUCCESS via:", "Numeric->DisplayID(SetDisplayInfo)", "ID:", numberValue)
-            self:UpdateDetails(asDid.name or "-", asDid.npcId or "-", numberValue)
-            self:SetStatus("Success (DisplayID)")
-            didTried = true
-            return
+        local data = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
+        if data and data.name then foundName = data.name end
+        if not foundName then
+            local data2 = CreatureDisplayDB:GetCreatureDisplayDataByDisplayId(numberValue)
+            if data2 and data2.name then foundName = data2.name end
         end
     end
 
-    self.model:ClearModel()
-    self.model:SetDisplayInfo(numberValue)
-    NPCMV_Print("SUCCESS via:", "Numeric->DisplayInfoDirect(SetDisplayInfo)", "ID:", numberValue)
-    self:UpdateDetails("-", "-", numberValue)
-    self:SetStatus("Success (Direct DisplayID)")
+    if not foundName then
+        local db = EnsureHarvestDB()
+        for _, batch in pairs(db.displayIdBatches) do
+            for _, entry in pairs(batch) do
+                if entry.NPC_ID == numberValue or entry.Display_ID == numberValue then
+                    foundName = entry.NPC_Name
+                    break
+                end
+            end
+            if foundName then break end
+        end
+    end
+
+    if foundName and foundName ~= "" and foundName ~= "-" then
+        self:ApplyName(foundName)
+        -- After tying to name, ensure we select the correct NPC ID in browsing state
+        for i, id in ipairs(self._curNpcIds) do
+            if id == numberValue then
+                self._curNpcIdx = i
+                self:UpdateDispListForNpc(id)
+                break
+            end
+        end
+        -- Or if it was a Display ID
+        for i, id in ipairs(self._curDispIds) do
+            if id == numberValue then
+                self._curDispIdx = i
+                break
+            end
+        end
+        self:SyncState()
+        return
+    end
+
+    -- Fallback for orphaned IDs
+    self._lastSearchName = "-"
+    self._curNpcIds = {}
+    self._curNpcIdx = 0
+    self._curDispIds = {}
+    self._curDispIdx = 0
+
+    local isNpcId = false
+    if IsCreatureDisplayDBAvailable() then
+        local d = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
+        if d then isNpcId = true end
+    end
+    if not isNpcId then
+        local db = EnsureHarvestDB()
+        for _, b in pairs(db.displayIdBatches) do
+            for _, e in pairs(b) do
+                if e.NPC_ID == numberValue then
+                    isNpcId = true
+                    break
+                end
+            end
+            if isNpcId then break end
+        end
+    end
+
+    if isNpcId then
+        self._curNpcIds = { numberValue }
+        self._curNpcIdx = 1
+        self:UpdateDispListForNpc(numberValue)
+    else
+        self._curDispIds = { numberValue }
+        self._curDispIdx = 1
+    end
+
+    self:SyncState()
 end
 
 function ModelViewer:ApplyName(npcName)
-    self:SetStatus("Searching: " .. npcName)
+    self._lastSearchName = npcName
+    self._curNpcIds = {}
+    self._curNpcIdx = 0
+    self._curDispIds = {}
+    self._curDispIdx = 0
 
-    -- If CreatureDisplayDB isn't present, fall back to our harvested DB.
-    if not IsCreatureDisplayDBAvailable() then
-        local want = ToLowerSafe(npcName)
-        local db = EnsureHarvestDB()
-        local displayIds = {}
-        local seen = {}
-        local npcId = "-"
+    -- Update Global Index if found
+    self:BuildNameIndexIfNeeded()
+    local lowered = ToLowerSafe(npcName)
+    if self._nameIndex then
+        for i, entry in ipairs(self._nameIndex) do
+            if entry.lower == lowered then
+                self._curGlobalIdx = i
+                break
+            end
+        end
+    end
 
-        for _, batch in pairs(db.batches) do
-            for _, entry in pairs(batch) do
-                if entry and ToLowerSafe(entry.NPC_Name) == want then
-                    local did = tonumber(entry.Display_ID)
-                    npcId = entry.NPC_ID
-                    if did and did > 0 and not seen[did] then
-                        seen[did] = true
-                        displayIds[#displayIds + 1] = did
-                    end
+    local npcIds = {}
+    local seen = {}
+
+    -- 1) Lib
+    if IsCreatureDisplayDBAvailable() then
+        local ids = CreatureDisplayDB:GetNpcIdsByName(npcName)
+        if ids then
+            for _, id in ipairs(ids) do
+                if not seen[id] then
+                    table.insert(npcIds, id)
+                    seen[id] = true
                 end
             end
         end
-
-        if #displayIds == 0 then
-            self:SetStatus("Name not found in local DB.")
-            return
-        end
-
-        table.sort(displayIds)
-        self:TryIdSequence("LocalDB->DisplayIDs(SetDisplayInfo)", displayIds, function(model, id)
-            model:SetDisplayInfo(id)
-        end, function(ok, chosenId)
-            if ok then
-                self:UpdateDetails(npcName, npcId, chosenId)
-                self:SetStatus("Success (Local DB)")
-            else
-                self:SetStatus("No model found for local data.")
-            end
-        end)
-        return
     end
 
-    -- 1) Zone-fixed NPC_ID
-    local fixedNpcId = CreatureDisplayDB:GetFixedNpcIdForCurrentZone(npcName)
-    if fixedNpcId then
-        self.model:ClearModel()
-        self.model:SetCreature(fixedNpcId)
-        NPCMV_Print("SUCCESS via:", "Name->ZoneFixedNPC_ID(SetCreature)", "Name:", npcName, "NPC_ID:", fixedNpcId)
-        self:UpdateDetails(npcName, fixedNpcId, "-")
-        self:SetStatus("Success (Zone Fixed)")
-        return
-    end
-
-    -- 2) Prefer DisplayIDs list
-    local displayIds = CreatureDisplayDB:GetDisplayIdsByName(npcName)
-    if displayIds and #displayIds > 0 then
-        self:TryIdSequence("Name->DisplayIDs(SetDisplayInfo)", displayIds, function(model, id)
-            model:SetDisplayInfo(id)
-        end, function(ok, chosenId)
-            if ok then
-                local npcIds = CreatureDisplayDB:GetNpcIdsByName(npcName)
-                self:UpdateDetails(npcName, npcIds and npcIds[1] or "-", chosenId)
-                self:SetStatus("Success (DisplayID Map)")
-            else
-                local npcIds = CreatureDisplayDB:GetNpcIdsByName(npcName)
-                if npcIds and #npcIds > 0 then
-                    self:TryIdSequence("Name->NPC_IDs(SetCreature)", npcIds, function(model, id)
-                        model:SetCreature(id)
-                    end, function(ok2, chosenNpc)
-                        if ok2 then
-                            self:UpdateDetails(npcName, chosenNpc, "-")
-                            self:SetStatus("Success (NPC_ID Fallback)")
-                        else
-                            self:SetStatus("No model found.")
-                        end
-                    end)
-                else
-                    self:SetStatus("Name not found.")
+    -- 2) Local
+    local db = EnsureHarvestDB()
+    for _, batch in pairs(db.displayIdBatches) do
+        for _, entry in pairs(batch) do
+            if ToLowerSafe(entry.NPC_Name) == lowered then
+                if not seen[entry.NPC_ID] then
+                    table.insert(npcIds, entry.NPC_ID)
+                    seen[entry.NPC_ID] = true
                 end
             end
-        end)
-        return
+        end
     end
 
-    local npcIds = CreatureDisplayDB:GetNpcIdsByName(npcName)
-    if npcIds and #npcIds > 0 then
-        self:TryIdSequence("Name->NPC_IDs(SetCreature)", npcIds, function(model, id)
-            model:SetCreature(id)
-        end, function(ok, chosenNpc)
-            if ok then
-                self:UpdateDetails(npcName, chosenNpc, "-")
-                self:SetStatus("Success (NPC_ID Map)")
-            else
-                self:SetStatus("No model found.")
+    table.sort(npcIds)
+    self._curNpcIds = npcIds
+    if #npcIds > 0 then
+        self._curNpcIdx = 1
+        self:UpdateDispListForNpc(npcIds[1])
+    else
+        -- Fallback: Check if name exists directly in lib via displayIds
+        if IsCreatureDisplayDBAvailable() then
+            local dids = CreatureDisplayDB:GetDisplayIdsByName(npcName)
+            if dids and #dids > 0 then
+                self._curDispIds = dids
+                self._curDispIdx = 1
             end
-        end)
-        return
+        end
     end
 
-    self:SetStatus("Name not found.")
+    self:SyncState()
+end
+
+function ModelViewer:LoadSpecific(npcId, displayId, name)
+    if not self.frame or not self.frame:IsShown() then return end
+
+    self.input:SetText(name or "")
+    self:ApplyName(name or "")
+
+    -- Refine selection to the exact hovered/targeted IDs
+    if npcId then
+        for i, id in ipairs(self._curNpcIds) do
+            if id == npcId then
+                self._curNpcIdx = i
+                break
+            end
+        end
+        self:UpdateDispListForNpc(npcId)
+    end
+
+    if displayId then
+        for i, id in ipairs(self._curDispIds) do
+            if id == displayId then
+                self._curDispIdx = i
+                break
+            end
+        end
+    end
+
+    self:SyncState()
 end
 
 -- =========================================================
@@ -1034,41 +1372,54 @@ end
 -- =========================================================
 local hoverHarvestHooked = false
 
-local function HookHoverHarvestIfNeeded()
-    if hoverHarvestHooked then
+function HookHarvestUnit(unit, source)
+    if not unit then return end
+
+    local okE, exists = pcall(UnitExists, unit)
+    if not okE or not exists then return end
+
+    local okP, isPlayer = pcall(UnitIsPlayer, unit)
+    if okP and isPlayer then return end
+
+    local okN, name = pcall(UnitName, unit)
+    local okG, guid = pcall(UnitGUID, unit)
+    local okD, displayId = pcall(function()
+        return UnitCreatureDisplayID and UnitCreatureDisplayID(unit) or nil
+    end)
+
+    if not okN or not okG or not okD or not guid or not displayId or displayId <= 0 then
         return
     end
+
+    local npcId = ParseNpcIdFromGuid(guid)
+    if not npcId then return end
+
+    AddHarvestEntry(name, npcId, displayId, source)
+
+    if ModelViewer.frame and ModelViewer.frame:IsShown() then
+        ModelViewer:LoadSpecific(npcId, displayId, name)
+    end
+end
+
+local function HookHoverHarvestIfNeeded()
+    if hoverHarvestHooked then return end
     hoverHarvestHooked = true
 
-    if not GameTooltip or not GameTooltip.HookScript then
-        return
+    -- 1. Modern Tooltip API
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall then
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
+            if tooltip == GameTooltip then
+                HookHarvestUnit("mouseover", "hover")
+            end
+        end)
+        -- 2. Legacy Tooltip API
+    elseif GameTooltip and GameTooltip.HookScript then
+        pcall(function()
+            GameTooltip:HookScript("OnTooltipSetUnit", function()
+                HookHarvestUnit("mouseover", "hover")
+            end)
+        end)
     end
-
-    GameTooltip:HookScript("OnTooltipSetUnit", function(tooltip)
-        local _, unit = tooltip:GetUnit()
-        unit = unit or "mouseover"
-        if not UnitExists(unit) then
-            return
-        end
-
-        local name = UnitName(unit)
-        local guid = UnitGUID(unit)
-        local npcId = ParseNpcIdFromGuid(guid)
-        if not npcId then
-            return
-        end
-
-        local displayId = UnitCreatureDisplayID and UnitCreatureDisplayID(unit) or nil
-        if not displayId or displayId <= 0 then
-            return
-        end
-
-        local ok, isNew = AddHarvestEntry(name, npcId, displayId, "hover")
-        if ok and isNew then
-            NPCMV_Print("Harvested:", name, "NPC_ID", npcId, "Display_ID", displayId)
-            ModelViewer._namesIndexBuilt = false
-        end
-    end)
 end
 
 -- =========================================================
@@ -1077,11 +1428,21 @@ end
 local InitFrame = CreateFrame("Frame")
 InitFrame:RegisterEvent("ADDON_LOADED")
 InitFrame:RegisterEvent("PLAYER_LOGIN")
+InitFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+InitFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+InitFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+
 InitFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
         EnsureHarvestDB()
         ImportFromCreatureDisplayDBIfNeeded()
     elseif event == "PLAYER_LOGIN" then
         HookHoverHarvestIfNeeded()
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        HookHarvestUnit("target", "target")
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        HookHarvestUnit("mouseover", "hover")
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        HookHarvestUnit(arg1, "nameplate")
     end
 end)
