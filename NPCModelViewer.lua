@@ -1,7 +1,7 @@
 local ADDON_NAME = ...
 
-local function SSHT_Print(...)
-    print("|cff00ff88SSHeadshotTest:|r", ...)
+local function NPCMV_Print(...)
+    print("|cff00ff88NPC Model Viewer:|r", ...)
 end
 
 -- =========================================================
@@ -43,19 +43,19 @@ end
 local DB_VERSION = 1
 
 local function EnsureHarvestDB()
-    if not SSHeadshotTestDB or type(SSHeadshotTestDB) ~= "table" then
-        SSHeadshotTestDB = {}
+    if not NPCModelViewerDB or type(NPCModelViewerDB) ~= "table" then
+        NPCModelViewerDB = {}
     end
 
-    SSHeadshotTestDB.meta = SSHeadshotTestDB.meta or {}
-    SSHeadshotTestDB.meta.version = SSHeadshotTestDB.meta.version or DB_VERSION
-    SSHeadshotTestDB.meta.importedCreatureDisplayDB = SSHeadshotTestDB.meta.importedCreatureDisplayDB or false
+    NPCModelViewerDB.meta = NPCModelViewerDB.meta or {}
+    NPCModelViewerDB.meta.version = NPCModelViewerDB.meta.version or DB_VERSION
+    NPCModelViewerDB.meta.importedCreatureDisplayDB = NPCModelViewerDB.meta.importedCreatureDisplayDB or false
 
     -- entriesByKey: ["<npcId>:<displayId>"] = { name=..., npcId=..., displayId=..., firstSeen=..., lastSeen=..., sources={...} }
-    SSHeadshotTestDB.entriesByKey = SSHeadshotTestDB.entriesByKey or {}
-    SSHeadshotTestDB.count = SSHeadshotTestDB.count or 0
+    NPCModelViewerDB.entriesByKey = NPCModelViewerDB.entriesByKey or {}
+    NPCModelViewerDB.count = NPCModelViewerDB.count or 0
 
-    return SSHeadshotTestDB
+    return NPCModelViewerDB
 end
 
 local function EscapeCsv(text)
@@ -176,7 +176,7 @@ local function ImportFromCreatureDisplayDBIfNeeded()
     end
 
     db.meta.importedCreatureDisplayDB = true
-    SSHT_Print("Seeded local DB from CreatureDisplayDB:", imported, "new entries (skipped:", skipped .. ")")
+    NPCMV_Print("Seeded local DB from CreatureDisplayDB:", imported, "new entries (skipped:", skipped .. ")")
 end
 
 local function ExportHarvestCsv()
@@ -202,7 +202,7 @@ local function ExportHarvestCsv()
     end)
 
     for _, entry in ipairs(entries) do
-        lines[#lines + 1] = table.concat({EscapeCsv(entry.name), tostring(entry.npcId), tostring(entry.displayId)}, ",")
+        lines[#lines + 1] = table.concat({ EscapeCsv(entry.name), tostring(entry.npcId), tostring(entry.displayId) }, ",")
     end
 
     return table.concat(lines, "\n")
@@ -218,7 +218,7 @@ function ExportUI:Ensure()
         return
     end
 
-    local frame = CreateFrame("Frame", "SSHeadshotTestExportFrame", UIParent, "BackdropTemplate")
+    local frame = CreateFrame("Frame", "NPCModelViewerExportFrame", UIParent, "BackdropTemplate")
     frame:SetSize(760, 560)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
@@ -242,7 +242,7 @@ function ExportUI:Ensure()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", 0, -10)
-    title:SetText("SSHeadshotTest Export")
+    title:SetText("NPC Model Viewer Export")
 
     local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     hint:SetPoint("TOP", title, "BOTTOM", 0, -6)
@@ -282,11 +282,11 @@ function ExportUI:Ensure()
         local text = editBox:GetText() or ""
         if C_Clipboard and C_Clipboard.SetClipboard then
             C_Clipboard.SetClipboard(text)
-            SSHT_Print("Export copied to clipboard.")
+            NPCMV_Print("Export copied to clipboard.")
         else
             editBox:SetFocus()
             editBox:HighlightText()
-            SSHT_Print("Clipboard API not available; text highlighted for manual copy.")
+            NPCMV_Print("Clipboard API not available; text highlighted for manual copy.")
         end
     end)
 
@@ -333,7 +333,7 @@ function ModelViewer:Ensure()
         return
     end
 
-    local frame = CreateFrame("Frame", "SSHeadshotTestModelViewerFrame", UIParent, "BackdropTemplate")
+    local frame = CreateFrame("Frame", "NPCModelViewerFrame", UIParent, "BackdropTemplate")
     frame:SetSize(620, 680)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
@@ -356,7 +356,7 @@ function ModelViewer:Ensure()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", 0, -10)
-    title:SetText("SS Model Viewer")
+    title:SetText("NPC Model Viewer")
 
     local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOP", title, "BOTTOM", 0, -6)
@@ -505,7 +505,7 @@ function ModelViewer:BuildNameIndexIfNeeded()
     end
 
     if #self._nameIndex == 0 then
-        SSHT_Print("No name index available yet. Hover NPCs to harvest names, or install CreatureDisplayDB.")
+        NPCMV_Print("No name index available yet. Hover NPCs to harvest names, or install CreatureDisplayDB.")
         return
     end
 
@@ -624,7 +624,7 @@ function ModelViewer:TryIdSequence(labelPrefix, idList, applyFn, onDone)
         end
         resolved = true
         if ok then
-            SSHT_Print("SUCCESS via:", labelPrefix, "ID:", chosenId)
+            NPCMV_Print("SUCCESS via:", labelPrefix, "ID:", chosenId)
         end
         onDone(ok, chosenId)
     end
@@ -722,7 +722,7 @@ function ModelViewer:ApplyNumeric(numberValue)
                         self:SetStatus("Numeric lookup: NPC_ID -> SetCreature fallback")
                         self.model:ClearModel()
                         self.model:SetCreature(numberValue)
-                        SSHT_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
+                        NPCMV_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
                         self:SetSubtitle("NPC_ID " .. numberValue)
                     end
                 end)
@@ -732,7 +732,7 @@ function ModelViewer:ApplyNumeric(numberValue)
             self:SetStatus("Numeric lookup: NPC_ID -> SetCreature")
             self.model:ClearModel()
             self.model:SetCreature(numberValue)
-            SSHT_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
+            NPCMV_Print("SUCCESS via:", "Numeric->NPC_ID(SetCreature)", "ID:", numberValue)
             self:SetSubtitle("NPC_ID " .. numberValue)
             return
         end
@@ -742,7 +742,7 @@ function ModelViewer:ApplyNumeric(numberValue)
             self:SetStatus("Numeric lookup: DisplayID -> SetDisplayInfo")
             self.model:ClearModel()
             self.model:SetDisplayInfo(numberValue)
-            SSHT_Print("SUCCESS via:", "Numeric->DisplayID(SetDisplayInfo)", "ID:", numberValue)
+            NPCMV_Print("SUCCESS via:", "Numeric->DisplayID(SetDisplayInfo)", "ID:", numberValue)
             self:SetSubtitle("DisplayID " .. numberValue)
             didTried = true
             return
@@ -752,7 +752,7 @@ function ModelViewer:ApplyNumeric(numberValue)
     self:SetStatus("Numeric fallback: SetDisplayInfo")
     self.model:ClearModel()
     self.model:SetDisplayInfo(numberValue)
-    SSHT_Print("SUCCESS via:", "Numeric->DisplayInfoDirect(SetDisplayInfo)", "ID:", numberValue)
+    NPCMV_Print("SUCCESS via:", "Numeric->DisplayInfoDirect(SetDisplayInfo)", "ID:", numberValue)
     self:SetSubtitle("DisplayInfo ID " .. numberValue .. (didTried and " (DB unmatched)" or ""))
 end
 
@@ -779,7 +779,7 @@ function ModelViewer:ApplyName(npcName)
 
         if #displayIds == 0 then
             self:SetStatus("Name not found locally yet. Hover NPCs to harvest it, or install CreatureDisplayDB.")
-            SSHT_Print("Local DB: name not found:", npcName)
+            NPCMV_Print("Local DB: name not found:", npcName)
             return
         end
 
@@ -792,7 +792,7 @@ function ModelViewer:ApplyName(npcName)
                 self:SetSubtitle(npcName .. " (DisplayID " .. chosenId .. ")")
             else
                 self:SetStatus("Local DB had IDs, but no model loaded.")
-                SSHT_Print("Local DB: IDs exist but no model loaded for name:", npcName)
+                NPCMV_Print("Local DB: IDs exist but no model loaded for name:", npcName)
             end
         end)
         return
@@ -804,7 +804,7 @@ function ModelViewer:ApplyName(npcName)
         self:SetStatus("Name lookup: ZoneFixed NPC_ID -> SetCreature")
         self.model:ClearModel()
         self.model:SetCreature(fixedNpcId)
-        SSHT_Print("SUCCESS via:", "Name->ZoneFixedNPC_ID(SetCreature)", "Name:", npcName, "NPC_ID:", fixedNpcId)
+        NPCMV_Print("SUCCESS via:", "Name->ZoneFixedNPC_ID(SetCreature)", "Name:", npcName, "NPC_ID:", fixedNpcId)
         self:SetSubtitle(npcName .. " (NPC_ID " .. fixedNpcId .. ")")
         return
     end
@@ -829,12 +829,12 @@ function ModelViewer:ApplyName(npcName)
                             self:SetSubtitle(npcName .. " (NPC_ID " .. chosenNpc .. ")")
                         else
                             self:SetStatus("No model found for this name (DB entry exists).")
-                            SSHT_Print("FAILED: name found in DB, but no model loaded from IDs:", npcName)
+                            NPCMV_Print("FAILED: name found in DB, but no model loaded from IDs:", npcName)
                         end
                     end)
                 else
                     self:SetStatus("Name not found (or has no IDs) in DB.")
-                    SSHT_Print("FAILED: no IDs for name:", npcName)
+                    NPCMV_Print("FAILED: no IDs for name:", npcName)
                 end
             end
         end)
@@ -851,14 +851,14 @@ function ModelViewer:ApplyName(npcName)
                 self:SetSubtitle(npcName .. " (NPC_ID " .. chosenNpc .. ")")
             else
                 self:SetStatus("No model found for this name (DB entry exists).")
-                SSHT_Print("FAILED: name found in DB, but no model loaded from NPC_IDs:", npcName)
+                NPCMV_Print("FAILED: name found in DB, but no model loaded from NPC_IDs:", npcName)
             end
         end)
         return
     end
 
     self:SetStatus("Name not found in DB.")
-    SSHT_Print("FAILED: name not found in DB:", npcName)
+    NPCMV_Print("FAILED: name not found in DB:", npcName)
 end
 
 -- =========================================================
@@ -899,10 +899,10 @@ function ModelViewer:BindEvents()
 end
 
 -- =========================================================
--- Slash command: /ssmodel  OR  /ssmodel export
+-- Slash command: /npcviewer  OR  /npcviewer export
 -- =========================================================
-SLASH_SSMODEL1 = "/ssmodel"
-SlashCmdList.SSMODEL = function(message)
+SLASH_NPCVIEWER1 = "/npcviewer"
+SlashCmdList.NPCVIEWER = function(message)
     ModelViewer:Ensure()
     ModelViewer:BindEvents()
 
@@ -958,7 +958,7 @@ local function HookHoverHarvestIfNeeded()
 
         local ok, isNew = AddHarvestEntry(name, npcId, displayId, "hover")
         if ok and isNew then
-            SSHT_Print("Harvested:", name, "NPC_ID", npcId, "Display_ID", displayId)
+            NPCMV_Print("Harvested:", name, "NPC_ID", npcId, "Display_ID", displayId)
             ModelViewer._namesIndexBuilt = false
         end
     end)
