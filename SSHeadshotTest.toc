@@ -1,0 +1,9 @@
+## Interface: 110207, 120000, 120001
+## Title: SSHeadshotTest
+## Notes: Display a 3D model by DisplayInfo ID via slash command
+## Author: Aceman
+## Version: 1.1
+## OptionalDeps: CreatureDisplayDB
+## SavedVariables: SSHeadshotTestDB
+
+SSHeadshotTest.lua
