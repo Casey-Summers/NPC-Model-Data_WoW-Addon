@@ -411,7 +411,7 @@ function ModelViewer:Ensure()
     end
 
     local frame = CreateFrame("Frame", "NPCModelViewerFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(620, 755) -- Increased height slightly
+    frame:SetSize(680, 800)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -423,41 +423,51 @@ function ModelViewer:Ensure()
     frame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 2
+        edgeSize = 1
     })
-    frame:SetBackdropColor(0.04, 0.04, 0.04, 0.96)
-    frame:SetBackdropBorderColor(0.35, 0.35, 0.35, 0.9)
+    frame:SetBackdropColor(0.02, 0.02, 0.02, 0.98)
+    frame:SetBackdropBorderColor(1, 1, 1, 0.05)
 
-    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+    -- Header / Title Bar
+    local header = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    header:SetPoint("TOPLEFT", 1, -1)
+    header:SetPoint("TOPRIGHT", -1, -1)
+    header:SetHeight(34)
+    header:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+    })
+    header:SetBackdropColor(1, 1, 1, 0.05)
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 25, -20)
-    title:SetText("NPC Model Viewer")
+    local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("LEFT", 15, 0)
+    title:SetText("NPC MODEL VIEWER")
+    title:SetTextColor(0.8, 0.8, 0.8)
+
+    local close = CreateFrame("Button", nil, header, "UIPanelCloseButton")
+    close:SetPoint("RIGHT", -2, 0)
+    close:SetScale(0.8)
 
     -- Search bar and buttons container (centered)
     local searchGroup = CreateFrame("Frame", nil, frame)
-    searchGroup:SetSize(500, 30)
-    searchGroup:SetPoint("TOP", frame, "TOP", 0, -60)
+    searchGroup:SetSize(600, 40)
+    searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -10)
 
     local input = CreateFrame("EditBox", nil, searchGroup, "InputBoxTemplate")
-    input:SetSize(300, 24)
-    input:SetPoint("LEFT", 0, 0)
+    input:SetSize(380, 28)
+    input:SetPoint("LEFT", 10, 0)
     input:SetAutoFocus(false)
     input:SetText("")
-    input:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-    end)
+    input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
     local go = CreateFrame("Button", nil, searchGroup, "UIPanelButtonTemplate")
-    go:SetSize(80, 24)
+    go:SetSize(90, 26)
     go:SetPoint("LEFT", input, "RIGHT", 12, 0)
-    go:SetText("Search")
+    go:SetText("SEARCH")
 
     local export = CreateFrame("Button", nil, searchGroup, "UIPanelButtonTemplate")
-    export:SetSize(80, 24)
+    export:SetSize(90, 26)
     export:SetPoint("LEFT", go, "RIGHT", 6, 0)
-    export:SetText("Export")
+    export:SetText("EXPORT")
 
     -- Global Navigation (Outside)
     local function CreateAtlasButton(parent, atlas, xOff, flipX)
@@ -521,185 +531,123 @@ function ModelViewer:Ensure()
     end
 
     local modelContainer = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    modelContainer:SetSize(570, 480)
-    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, -10)
+    modelContainer:SetSize(640, 460)
+    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, 0)
     modelContainer:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
         edgeSize = 1
     })
-    modelContainer:SetBackdropColor(0, 0, 0, 0.4)
-    modelContainer:SetBackdropBorderColor(1, 1, 1, 0.1)
+    modelContainer:SetBackdropColor(0, 0, 0, 0.3)
+    modelContainer:SetBackdropBorderColor(1, 1, 1, 0.05)
 
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
 
+    -- No Model Warning
+    local noModelWarning = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    noModelWarning:SetPoint("CENTER")
+    noModelWarning:SetText("NO MODEL DATA AVAILABLE")
+    noModelWarning:SetTextColor(1, 0.2, 0.2, 0.8)
+    noModelWarning:Hide()
+    self.noModelWarning = noModelWarning
+
     -- Subsection (Subcontext frame)
     local infoBox = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -10)
-    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -25, 10)
+    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 15)
     infoBox:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1
     })
-    infoBox:SetBackdropColor(0.08, 0.08, 0.08, 0.6)
-    infoBox:SetBackdropBorderColor(1, 1, 1, 0.1)
+    infoBox:SetBackdropColor(1, 1, 1, 0.02)
 
-    -- 1. Name top center
+    -- 1. Name and Extra Info
     local nameLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    nameLabel:SetPoint("TOP", infoBox, "TOP", 0, -15)
+    nameLabel:SetPoint("TOP", infoBox, "TOP", 0, -12)
     nameLabel:SetText("-")
     self.nameLabel = nameLabel
 
-    -- 4. Warning Label (Under name)
-    self.warningLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    self.warningLabel:SetPoint("TOP", nameLabel, "BOTTOM", 0, -2)
-    self.warningLabel:SetTextColor(1, 0.2, 0.2)
-    self.warningLabel:SetText("")
+    local extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    extraInfo:SetPoint("TOP", nameLabel, "BOTTOM", 0, -2)
+    extraInfo:SetTextColor(0.5, 0.8, 1)
+    self.extraInfo = extraInfo
 
-    -- 2. Left Side: NPC ID
-    local npcCont = CreateFrame("Frame", nil, infoBox)
-    npcCont:SetSize(220, 120)
-    npcCont:SetPoint("TOPLEFT", 10, -35)
+    -- 2. Left Column (Biometrics)
+    local leftCol = CreateFrame("Frame", nil, infoBox)
+    leftCol:SetSize(200, 160)
+    leftCol:SetPoint("TOPLEFT", 10, -50)
 
-    local npcLabel = npcCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    npcLabel:SetPoint("TOP", 0, 0)
-    npcLabel:SetText("NPC ID")
-    npcLabel:SetTextColor(0.5, 0.5, 0.5)
-
-    local npcValue = npcCont:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    npcValue:SetPoint("TOP", npcLabel, "BOTTOM", 0, -4)
-    npcValue:SetText("-")
-    self.npcIdLabel = npcValue
-
-    local nPrev = CreateFrame("Button", nil, npcCont)
-    nPrev:SetSize(24, 24)
-    nPrev:SetPoint("TOPRIGHT", npcCont, "TOP", -22, -45)
-    local nPrevTex = nPrev:CreateTexture(nil, "ARTWORK")
-    nPrevTex:SetAllPoints()
-    nPrevTex:SetAtlas("shop-header-arrow-disabled")
-    nPrevTex:SetVertexColor(1, 0.8, 0)
-    -- points RIGHT
-    nPrev:SetNormalTexture(nPrevTex)
-    local nPrevHigh = nPrev:CreateTexture(nil, "HIGHLIGHT")
-    nPrevHigh:SetAllPoints()
-    nPrevHigh:SetAtlas("shop-header-arrow-disabled")
-    nPrevHigh:SetVertexColor(1, 0.8, 0)
-    nPrevHigh:SetBlendMode("ADD")
-    nPrev:SetScript("OnClick", function() self:PrevNpc() end)
-
-    local nNext = CreateFrame("Button", nil, npcCont)
-    nNext:SetSize(24, 24)
-    nNext:SetPoint("TOPLEFT", npcCont, "TOP", 22, -45)
-    local nNextTex = nNext:CreateTexture(nil, "ARTWORK")
-    nNextTex:SetAllPoints()
-    nNextTex:SetAtlas("shop-header-arrow-disabled")
-    nNextTex:SetVertexColor(1, 0.8, 0)
-    nNextTex:SetTexCoord(1, 0, 0, 1) -- points LEFT
-    nNext:SetNormalTexture(nNextTex)
-    local nNextHigh = nNext:CreateTexture(nil, "HIGHLIGHT")
-    nNextHigh:SetAllPoints()
-    nNextHigh:SetAtlas("shop-header-arrow-disabled")
-    nNextHigh:SetVertexColor(1, 0.8, 0)
-    nNextHigh:SetTexCoord(1, 0, 0, 1)
-    nNextHigh:SetBlendMode("ADD")
-    nNext:SetScript("OnClick", function() self:NextNpc() end)
-
-    local npcCounter = npcCont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    npcCounter:SetPoint("TOP", npcCont, "TOP", 0, -48)
-    npcCounter:SetText("0/0")
-    self.npcCounter = npcCounter
-
-    local npcDesc = npcCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    npcDesc:SetPoint("TOP", 0, -85)
-    npcDesc:SetText("Flick through same-name IDs")
-    npcDesc:SetScale(0.8)
-
-    -- Metadata labels (Center/Bottom)
-    local metaGroup = CreateFrame("Frame", nil, infoBox)
-    metaGroup:SetSize(400, 80)
-    metaGroup:SetPoint("BOTTOM", infoBox, "BOTTOM", 0, 15)
-
-    local function CreateMetaLabel(parent, labelText, yOff)
+    local function CreateSpecLabel(parent, labelText, yOff)
         local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         lbl:SetPoint("TOP", 0, yOff)
-        lbl:SetTextColor(0.5, 0.5, 0.5)
-        lbl:SetText(labelText)
-
+        lbl:SetText(labelText:upper())
+        lbl:SetTextColor(0.4, 0.4, 0.4)
         local val = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         val:SetPoint("TOP", lbl, "BOTTOM", 0, -2)
         val:SetText("-")
         return val
     end
 
-    self.zoneLabel = CreateMetaLabel(metaGroup, "ZONE", 0)
-    self.typeLabel = CreateMetaLabel(metaGroup, "TYPE / FAMILY", -28)
-    self.locLabel = CreateMetaLabel(metaGroup, "LOCATION", -28 * 2)
-    self.patchLabel = CreateMetaLabel(metaGroup, "DISCOVERED IN PATCH", -28 * 3)
+    self.typeLabel = CreateSpecLabel(leftCol, "Type / Family", 0)
+    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -40)
 
-    self.metaGroup = metaGroup
+    -- 3. Right Column (World/Source)
+    local rightCol = CreateFrame("Frame", nil, infoBox)
+    rightCol:SetSize(200, 160)
+    rightCol:SetPoint("TOPRIGHT", -10, -50)
 
-    -- 2. Right Side: Display ID
-    local dispCont = CreateFrame("Frame", nil, infoBox)
-    dispCont:SetSize(220, 120)
-    dispCont:SetPoint("TOPRIGHT", -10, -35)
+    self.locLabel = CreateSpecLabel(rightCol, "Location", 0)
+    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40)
 
-    local dispLabel = dispCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    dispLabel:SetPoint("TOP", 0, 0)
-    dispLabel:SetText("DISPLAY ID")
-    dispLabel:SetTextColor(0.5, 0.5, 0.5)
+    -- 4. ID Navigation Area (Center)
+    local navGroup = CreateFrame("Frame", nil, infoBox)
+    navGroup:SetSize(240, 160)
+    navGroup:SetPoint("TOP", infoBox, "TOP", 0, -50)
 
-    local dispValue = dispCont:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    dispValue:SetPoint("TOP", dispLabel, "BOTTOM", 0, -4)
-    dispValue:SetText("-")
-    self.displayIdLabel = dispValue
+    local function CreateNavControl(parent, labelText, yOff, onPrev, onNext)
+        local cont = CreateFrame("Frame", nil, parent)
+        cont:SetSize(240, 60)
+        cont:SetPoint("TOP", 0, yOff)
 
-    local dPrev = CreateFrame("Button", nil, dispCont)
-    dPrev:SetSize(24, 24)
-    dPrev:SetPoint("TOPRIGHT", dispCont, "TOP", -22, -45)
-    local dPrevTex = dPrev:CreateTexture(nil, "ARTWORK")
-    dPrevTex:SetAllPoints()
-    dPrevTex:SetAtlas("shop-header-arrow-disabled")
-    dPrevTex:SetVertexColor(1, 0.8, 0)
-    -- points RIGHT
-    dPrev:SetNormalTexture(dPrevTex)
-    local dPrevHigh = dPrev:CreateTexture(nil, "HIGHLIGHT")
-    dPrevHigh:SetAllPoints()
-    dPrevHigh:SetAtlas("shop-header-arrow-disabled")
-    dPrevHigh:SetVertexColor(1, 0.8, 0)
-    dPrevHigh:SetBlendMode("ADD")
-    dPrev:SetScript("OnClick", function() self:PrevDisp() end)
+        local lbl = cont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        lbl:SetPoint("TOP", 0, 0)
+        lbl:SetText(labelText)
+        lbl:SetTextColor(0.5, 0.5, 0.5)
 
-    local dNext = CreateFrame("Button", nil, dispCont)
-    dNext:SetSize(24, 24)
-    dNext:SetPoint("TOPLEFT", dispCont, "TOP", 22, -45)
-    local dNextTex = dNext:CreateTexture(nil, "ARTWORK")
-    dNextTex:SetAllPoints()
-    dNextTex:SetAtlas("shop-header-arrow-disabled")
-    dNextTex:SetVertexColor(1, 0.8, 0)
-    dNextTex:SetTexCoord(1, 0, 0, 1) -- points LEFT
-    dNext:SetNormalTexture(dNextTex)
-    local dNextHigh = dNext:CreateTexture(nil, "HIGHLIGHT")
-    dNextHigh:SetAllPoints()
-    dNextHigh:SetAtlas("shop-header-arrow-disabled")
-    dNextHigh:SetVertexColor(1, 0.8, 0)
-    dNextHigh:SetTexCoord(1, 0, 0, 1)
-    dNextHigh:SetBlendMode("ADD")
-    dNext:SetScript("OnClick", function() self:NextDisp() end)
+        local val = cont:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        val:SetPoint("TOP", lbl, "BOTTOM", 0, -2)
+        val:SetText("-")
 
-    local dispCounter = dispCont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    dispCounter:SetPoint("TOP", dispCont, "TOP", 0, -48)
-    dispCounter:SetText("0/0")
-    self.dispCounter = dispCounter
+        local prev = CreateAtlasButton(cont, "shop-header-arrow-disabled", 0, false)
+        prev:SetSize(20, 20)
+        prev:SetPoint("RIGHT", val, "LEFT", -40, 0)
+        prev:SetScript("OnClick", onPrev)
 
-    local dispDesc = dispCont:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    dispDesc:SetPoint("TOP", 0, -85)
-    dispDesc:SetText("Flick through NPC variations")
-    dispDesc:SetScale(0.8)
+        local next = CreateAtlasButton(cont, "shop-header-arrow-disabled", 0, true)
+        next:SetSize(20, 20)
+        next:SetPoint("LEFT", val, "RIGHT", 40, 0)
+        next:SetScript("OnClick", onNext)
 
+        local count = cont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        count:SetPoint("TOP", val, "BOTTOM", 0, -2)
+        count:SetTextColor(0.8, 0.6, 0)
+
+        return val, count, prev, next
+    end
+
+    self.npcIdLabel, self.npcCounter, self.npcPrev, self.npcNext = CreateNavControl(navGroup, "NPC ID", 0,
+        function() self:PrevNpc() end, function() self:NextNpc() end)
+
+    self.displayIdLabel, self.dispCounter, self.dispPrev, self.dispNext = CreateNavControl(navGroup, "DISPLAY ID", -60,
+        function() self:PrevDisp() end, function() self:NextDisp() end)
+
+    self.warningLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    self.warningLabel:SetPoint("BOTTOM", 0, 10)
+    self.warningLabel:SetTextColor(1, 0.2, 0.2)
+    self.warningLabel:SetText("")
+
+    -- Store references back to self
     self.frame = frame
-    self.title = title
     self.input = input
     self.go = go
     self.export = export
@@ -707,17 +655,6 @@ function ModelViewer:Ensure()
     self.suggest = suggest
     self.suggestButtons = suggestButtons
     self.MAX_SUGGEST = MAX_SUGGEST
-
-    self.npcPrev = nPrev
-    self.npcNext = nNext
-    self.dispPrev = dPrev
-    self.dispNext = dNext
-
-    -- Tiny tameable / class icons or text
-    self.extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    self.extraInfo:SetPoint("TOPRIGHT", -15, -15)
-    self.extraInfo:SetTextColor(0, 1, 0.5)
-    self.extraInfo:SetText("")
 end
 
 function ModelViewer:SyncState()
@@ -745,122 +682,87 @@ function ModelViewer:SyncState()
     local npcCount = #self._curNpcIds
     local npcIdx = self._curNpcIdx
     if npcCount == 0 then npcIdx = 0 end
-    self.npcCounter:SetText(("%d/%d"):format(npcIdx, npcCount))
-    self.npcPrev:SetShown(npcCount > 1)
-    self.npcNext:SetShown(npcCount > 1)
+    self.npcCounter:SetText(("%d / %d"):format(npcIdx, npcCount))
+    self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
+    self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
 
     local dispCount = #self._curDispIds
     local dispIdx = self._curDispIdx
     if dispCount == 0 then dispIdx = 0 end
-    self.dispCounter:SetText(("%d/%d"):format(dispIdx, dispCount))
-    self.dispPrev:SetShown(dispCount > 1)
-    self.dispNext:SetShown(dispCount > 1)
+    self.dispCounter:SetText(("%d / %d"):format(dispIdx, dispCount))
+    self.dispPrev:GetNormalTexture():SetDesaturated(dispCount <= 1)
+    self.dispNext:GetNormalTexture():SetDesaturated(dispCount <= 1)
 
     -- Handle Lack of IDs or Visuals
     local warning = ""
-    if dispCount == 0 and (npcId ~= "-" or name ~= "-") then
+    local showNoModel = false
+
+    if dispId == "NoData" then
+        showNoModel = true
+    elseif dispCount == 0 and (npcId ~= "-" or name ~= "-") then
         warning = "Warning: No Display IDs found"
+        showNoModel = true
     elseif npcId == "-" and dispId == "-" and name ~= "-" then
         warning = "Warning: Entry found but no IDs available"
+        showNoModel = true
     end
-    self.warningLabel:SetText(warning)
 
-    if dispId ~= "-" and dispId ~= self._lastDisplayedId then
+    self.warningLabel:SetText(warning)
+    self.noModelWarning:SetShown(showNoModel)
+
+    if not showNoModel and dispId ~= "-" and dispId ~= self._lastDisplayedId then
         self.model:SetDisplayInfo(dispId)
         self._lastDisplayedId = dispId
-    elseif dispId == "-" then
+    elseif showNoModel or dispId == "-" then
         self.model:ClearModel()
         self._lastDisplayedId = nil
     end
 end
 
 function ModelViewer:UpdateDispListForNpc(npcId)
-    -- Aggregate ALL Display IDs for the current NPC NAME
-    local name = self._lastSearchName
-    if not name or name == "-" or name == "" then
-        -- No name context: Fallback to IDs just for this NPC_ID
-        self._curDispIds = {}
-        if npcId and npcId ~= "-" then
-            if NPCModelViewerAPI then
-                self._curDispIds = NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId) or {}
-            end
-            if #self._curDispIds == 0 and IsCreatureDisplayDBAvailable() then
-                self._curDispIds = CreatureDisplayDB:GetDisplayIdsByNpcId(npcId) or {}
-            end
-            local db = EnsureHarvestDB()
-            local seen = {}
-            for _, d in ipairs(self._curDispIds) do seen[d] = true end
-            for _, b in pairs(db.displayIdBatches) do
-                for _, e in pairs(b) do
-                    if e.NPC_ID == npcId and not seen[e.Display_ID] then
-                        table.insert(self._curDispIds, e.Display_ID)
-                        seen[e.Display_ID] = true
-                    end
-                end
-            end
-        end
-        table.sort(self._curDispIds)
-        self._curDispIdx = #self._curDispIds > 0 and 1 or 0
-        return
-    end
-
     local ids = {}
     local seen = {}
 
-    -- 1) Master Data (NPCModelViewerAPI)
+    local function AddId(did)
+        if did == "NoData" then
+            if not seen["NoData"] then
+                table.insert(ids, "NoData")
+                seen["NoData"] = true
+            end
+        else
+            local num = tonumber(did)
+            if num and not seen[num] then
+                table.insert(ids, num)
+                seen[num] = true
+            end
+        end
+    end
+
+    -- 1) Master Data (Strict Correlation)
     if NPCModelViewerAPI then
-        local apiDids = NPCModelViewerAPI:GetDisplayIdsByName(name)
+        local apiDids = NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId)
         if apiDids then
-            for _, did in ipairs(apiDids) do
-                if not seen[did] then
-                    table.insert(ids, did)
-                    seen[did] = true
-                end
-            end
+            for _, did in ipairs(apiDids) do AddId(did) end
         end
     end
 
-    -- 2) Lib
-    if IsCreatureDisplayDBAvailable() then
-        local dids = CreatureDisplayDB:GetDisplayIdsByName(name)
-        if dids then
-            for _, did in ipairs(dids) do
-                if not seen[did] then
-                    table.insert(ids, did)
-                    seen[did] = true
-                end
-            end
-        end
-    end
-
-    -- 3) Harvested (SavedVariables)
+    -- 2) Harvested (SavedVariables) - only if it matches this npcId
     local db = EnsureHarvestDB()
-    local lowered = ToLowerSafe(name)
     for _, batch in pairs(db.displayIdBatches) do
         for _, entry in pairs(batch) do
-            if ToLowerSafe(entry.NPC_Name) == lowered then
-                local did = tonumber(entry.Display_ID)
-                if did and not seen[did] then
-                    table.insert(ids, did)
-                    seen[did] = true
-                end
+            if entry.NPC_ID == npcId then
+                AddId(entry.Display_ID)
             end
         end
     end
 
-    table.sort(ids)
+    table.sort(ids, function(a, b)
+        if a == "NoData" then return false end
+        if b == "NoData" then return true end
+        return a < b
+    end)
+
     self._curDispIds = ids
-
-    -- Maintain current Display ID if it's still in the list
-    local oldDid = self._curDispIds[self._curDispIdx]
-    if oldDid then
-        for i, id in ipairs(ids) do
-            if id == oldDid then
-                self._curDispIdx = i
-                return
-            end
-        end
-    end
     self._curDispIdx = #ids > 0 and 1 or 0
 end
 
@@ -931,15 +833,26 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
                                    encounter, instance)
     if not self.frame then return end
     self.nameLabel:SetText(name or "-")
-    self.npcIdLabel:SetText(tostring(npcId or "-"))
-    self.displayIdLabel:SetText(tostring(displayId or "-"))
+
+    local function SetIdText(label, id)
+        if id == "NoData" then
+            label:SetText("N/A")
+            label:SetTextColor(1, 0.2, 0.2)
+        else
+            label:SetText(tostring(id or "-"))
+            label:SetTextColor(1, 0.8, 0)
+        end
+    end
+
+    SetIdText(self.npcIdLabel, npcId)
+    SetIdText(self.displayIdLabel, displayId)
 
     self.zoneLabel:SetText(zone or "Unknown")
     local typeFamily = (ntype or "Unknown")
     if family and family ~= "Unknown" then
         typeFamily = typeFamily .. " / " .. family
     end
-    self.typeLabel:SetText(typeFamily)
+    self.typeLabel:SetText(typeFamily or "Unknown")
 
     local location = "Open World"
     if encounter then
