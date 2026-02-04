@@ -411,7 +411,7 @@ function ModelViewer:Ensure()
     end
 
     local frame = CreateFrame("Frame", "NPCModelViewerFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(620, 715)
+    frame:SetSize(620, 755) -- Increased height slightly
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -616,6 +616,30 @@ function ModelViewer:Ensure()
     npcDesc:SetText("Flick through same-name IDs")
     npcDesc:SetScale(0.8)
 
+    -- Metadata labels (Center/Bottom)
+    local metaGroup = CreateFrame("Frame", nil, infoBox)
+    metaGroup:SetSize(400, 80)
+    metaGroup:SetPoint("BOTTOM", infoBox, "BOTTOM", 0, 15)
+
+    local function CreateMetaLabel(parent, labelText, yOff)
+        local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        lbl:SetPoint("TOP", 0, yOff)
+        lbl:SetTextColor(0.5, 0.5, 0.5)
+        lbl:SetText(labelText)
+
+        local val = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        val:SetPoint("TOP", lbl, "BOTTOM", 0, -2)
+        val:SetText("-")
+        return val
+    end
+
+    self.zoneLabel = CreateMetaLabel(metaGroup, "ZONE", 0)
+    self.typeLabel = CreateMetaLabel(metaGroup, "TYPE / FAMILY", -28)
+    self.locLabel = CreateMetaLabel(metaGroup, "LOCATION", -28 * 2)
+    self.patchLabel = CreateMetaLabel(metaGroup, "DISCOVERED IN PATCH", -28 * 3)
+
+    self.metaGroup = metaGroup
+
     -- 2. Right Side: Display ID
     local dispCont = CreateFrame("Frame", nil, infoBox)
     dispCont:SetSize(220, 120)
@@ -688,6 +712,12 @@ function ModelViewer:Ensure()
     self.npcNext = nNext
     self.dispPrev = dPrev
     self.dispNext = dNext
+
+    -- Tiny tameable / class icons or text
+    self.extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    self.extraInfo:SetPoint("TOPRIGHT", -15, -15)
+    self.extraInfo:SetTextColor(0, 1, 0.5)
+    self.extraInfo:SetText("")
 end
 
 function ModelViewer:SyncState()
@@ -695,7 +725,21 @@ function ModelViewer:SyncState()
     local npcId = self._curNpcIds[self._curNpcIdx] or "-"
     local dispId = self._curDispIds[self._curDispIdx] or "-"
 
-    self:UpdateDetails(name, npcId, dispId)
+    local zone, ntype, family, classification, patch, tameable, encounter, instance
+    if NPCModelViewerAPI and name ~= "-" and npcId ~= "-" then
+        zone = NPCModelViewerAPI:GetZoneForNpcId(name, npcId)
+        ntype = NPCModelViewerAPI:GetTypeForNpcId(name, npcId)
+        family = NPCModelViewerAPI:GetFamilyForNpcId(name, npcId)
+        classification = NPCModelViewerAPI:GetClassificationForNpcId(name, npcId)
+        patch = NPCModelViewerAPI:GetPatchForNpcId(name, npcId)
+        tameable = NPCModelViewerAPI:GetTameableForNpcId(name, npcId)
+        encounter = NPCModelViewerAPI:GetEncounterForNpcId(name, npcId)
+        if encounter then
+            instance = NPCModelViewerAPI:GetInstanceForEncounter(name, encounter)
+        end
+    end
+
+    self:UpdateDetails(name, npcId, dispId, zone, ntype, family, classification, patch, tameable, encounter, instance)
 
     -- Update Counters
     local npcCount = #self._curNpcIds
@@ -737,7 +781,10 @@ function ModelViewer:UpdateDispListForNpc(npcId)
         -- No name context: Fallback to IDs just for this NPC_ID
         self._curDispIds = {}
         if npcId and npcId ~= "-" then
-            if IsCreatureDisplayDBAvailable() then
+            if NPCModelViewerAPI then
+                self._curDispIds = NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId) or {}
+            end
+            if #self._curDispIds == 0 and IsCreatureDisplayDBAvailable() then
                 self._curDispIds = CreatureDisplayDB:GetDisplayIdsByNpcId(npcId) or {}
             end
             local db = EnsureHarvestDB()
@@ -760,7 +807,20 @@ function ModelViewer:UpdateDispListForNpc(npcId)
     local ids = {}
     local seen = {}
 
-    -- 1) Lib
+    -- 1) Master Data (NPCModelViewerAPI)
+    if NPCModelViewerAPI then
+        local apiDids = NPCModelViewerAPI:GetDisplayIdsByName(name)
+        if apiDids then
+            for _, did in ipairs(apiDids) do
+                if not seen[did] then
+                    table.insert(ids, did)
+                    seen[did] = true
+                end
+            end
+        end
+    end
+
+    -- 2) Lib
     if IsCreatureDisplayDBAvailable() then
         local dids = CreatureDisplayDB:GetDisplayIdsByName(name)
         if dids then
@@ -773,7 +833,7 @@ function ModelViewer:UpdateDispListForNpc(npcId)
         end
     end
 
-    -- 2) Harvested
+    -- 3) Harvested (SavedVariables)
     local db = EnsureHarvestDB()
     local lowered = ToLowerSafe(name)
     for _, batch in pairs(db.displayIdBatches) do
@@ -867,11 +927,40 @@ function ModelViewer:ResetVisuals()
     self:UpdateDetails("-", "-", "-")
 end
 
-function ModelViewer:UpdateDetails(name, npcId, displayId)
+function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, classification, patch, tameable,
+                                   encounter, instance)
     if not self.frame then return end
     self.nameLabel:SetText(name or "-")
     self.npcIdLabel:SetText(tostring(npcId or "-"))
     self.displayIdLabel:SetText(tostring(displayId or "-"))
+
+    self.zoneLabel:SetText(zone or "Unknown")
+    local typeFamily = (ntype or "Unknown")
+    if family and family ~= "Unknown" then
+        typeFamily = typeFamily .. " / " .. family
+    end
+    self.typeLabel:SetText(typeFamily)
+
+    local location = "Open World"
+    if encounter then
+        location = "Encounter: " .. encounter
+        if instance then
+            location = instance .. " (" .. encounter .. ")"
+        end
+    end
+    self.locLabel:SetText(location)
+
+    self.patchLabel:SetText(patch or "Unknown")
+
+    local extra = ""
+    if classification and classification ~= "Normal" then
+        extra = classification
+    end
+    if tameable == "true" then
+        if extra ~= "" then extra = extra .. " | " end
+        extra = extra .. "Tameable"
+    end
+    self.extraInfo:SetText(extra)
 end
 
 -- =========================================================
@@ -897,7 +986,7 @@ function ModelViewer:BuildGlobalIndicesIfNeeded()
                 table.insert(self._nameIndex, { name = name, lower = lower })
             end
         end
-        if npcId and npcId > 0 then
+        if type(npcId) == "number" and npcId > 0 then
             if not seenId[npcId] then
                 seenId[npcId] = true
                 table.insert(self._idIndex, npcId)
@@ -922,6 +1011,19 @@ function ModelViewer:BuildGlobalIndicesIfNeeded()
     for _, batch in pairs(db.displayIdBatches) do
         for _, entry in pairs(batch) do
             Collect(entry.NPC_Name, entry.NPC_ID)
+        end
+    end
+
+    -- 3) Master Data (NPCModelViewerAPI)
+    if NPCModelViewer_Data then
+        for name, data in pairs(NPCModelViewer_Data) do
+            if data.ids then
+                for npcId, _ in pairs(data.ids) do
+                    Collect(name, npcId)
+                end
+            else
+                Collect(name, nil)
+            end
         end
     end
 
@@ -1129,8 +1231,16 @@ end
 function ModelViewer:ApplyNumeric(numberValue)
     local foundName = nil
 
-    -- Tie back to name if possible
-    if IsCreatureDisplayDBAvailable() then
+    -- 1) Master Data (NPCModelViewerAPI)
+    if NPCModelViewerAPI then
+        local names = NPCModelViewerAPI:GetNamesByNpcId(numberValue)
+        if names and names[1] then
+            foundName = names[1]
+        end
+    end
+
+    -- 2) Lib
+    if not foundName and IsCreatureDisplayDBAvailable() then
         local data = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
         if data and data.name then foundName = data.name end
         if not foundName then
@@ -1139,6 +1249,7 @@ function ModelViewer:ApplyNumeric(numberValue)
         end
     end
 
+    -- 3) Local (SavedVariables)
     if not foundName then
         local db = EnsureHarvestDB()
         for _, batch in pairs(db.displayIdBatches) do
@@ -1232,7 +1343,20 @@ function ModelViewer:ApplyName(npcName)
     local npcIds = {}
     local seen = {}
 
-    -- 1) Lib
+    -- 1) Master Data
+    if NPCModelViewerAPI then
+        local apiNpcIds = NPCModelViewerAPI:GetNpcIdsByName(npcName)
+        if apiNpcIds then
+            for _, id in ipairs(apiNpcIds) do
+                if not seen[id] then
+                    table.insert(npcIds, id)
+                    seen[id] = true
+                end
+            end
+        end
+    end
+
+    -- 2) Lib (CreatureDisplayDB)
     if IsCreatureDisplayDBAvailable() then
         local ids = CreatureDisplayDB:GetNpcIdsByName(npcName)
         if ids then
@@ -1245,7 +1369,7 @@ function ModelViewer:ApplyName(npcName)
         end
     end
 
-    -- 2) Local
+    -- 3) Local (SavedVariables)
     local db = EnsureHarvestDB()
     for _, batch in pairs(db.displayIdBatches) do
         for _, entry in pairs(batch) do
@@ -1264,13 +1388,40 @@ function ModelViewer:ApplyName(npcName)
         self._curNpcIdx = 1
         self:UpdateDispListForNpc(npcIds[1])
     else
-        -- Fallback: Check if name exists directly in lib via displayIds
-        if IsCreatureDisplayDBAvailable() then
-            local dids = CreatureDisplayDB:GetDisplayIdsByName(npcName)
-            if dids and #dids > 0 then
-                self._curDispIds = dids
-                self._curDispIdx = 1
+        -- Fallback: Check if name exists via displayIds
+        local dids = {}
+        local seenDid = {}
+
+        -- 1) Master Data
+        if NPCModelViewerAPI then
+            local apiDids = NPCModelViewerAPI:GetDisplayIdsByName(npcName)
+            if apiDids then
+                for _, id in ipairs(apiDids) do
+                    if not seenDid[id] then
+                        table.insert(dids, id)
+                        seenDid[id] = true
+                    end
+                end
             end
+        end
+
+        -- 2) Lib
+        if IsCreatureDisplayDBAvailable() then
+            local libDids = CreatureDisplayDB:GetDisplayIdsByName(npcName)
+            if libDids then
+                for _, id in ipairs(libDids) do
+                    if not seenDid[id] then
+                        table.insert(dids, id)
+                        seenDid[id] = true
+                    end
+                end
+            end
+        end
+
+        if #dids > 0 then
+            table.sort(dids)
+            self._curDispIds = dids
+            self._curDispIdx = 1
         end
     end
 
