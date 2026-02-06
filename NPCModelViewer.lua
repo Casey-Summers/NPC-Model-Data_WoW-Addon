@@ -599,6 +599,9 @@ function ModelViewer:Ensure()
     self.locLabel = CreateSpecLabel(rightCol, "Location", 0)
     self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40)
 
+    -- Timer for debounce
+    self._searchTimer = nil
+
     -- 4. ID Navigation Area (Center)
     local navGroup = CreateFrame("Frame", nil, infoBox)
     navGroup:SetSize(240, 160)
@@ -658,40 +661,37 @@ function ModelViewer:Ensure()
 end
 
 function ModelViewer:SyncState()
-    local name = self._lastSearchName or "-"
-    local npcId = self._curNpcIds[self._curNpcIdx] or "-"
-    local dispId = self._curDispIds[self._curDispIdx] or "-"
+    local nameVariant = self._curResults and self._curResults[self._curResultIdx]
+    local name = nameVariant and nameVariant.name or "-"
+    local npcId = nameVariant and nameVariant.npcId or "-"
+    local dispId = nameVariant and nameVariant.displayId or "-"
 
     local zone, ntype, family, classification, patch, tameable, encounter, instance
-    if NPCModelViewerAPI and name ~= "-" and npcId ~= "-" then
-        zone = NPCModelViewerAPI:GetZoneForNpcId(name, npcId)
-        ntype = NPCModelViewerAPI:GetTypeForNpcId(name, npcId)
-        family = NPCModelViewerAPI:GetFamilyForNpcId(name, npcId)
-        classification = NPCModelViewerAPI:GetClassificationForNpcId(name, npcId)
-        patch = NPCModelViewerAPI:GetPatchForNpcId(name, npcId)
-        tameable = NPCModelViewerAPI:GetTameableForNpcId(name, npcId)
-        encounter = NPCModelViewerAPI:GetEncounterForNpcId(name, npcId)
-        if encounter then
-            instance = NPCModelViewerAPI:GetInstanceForEncounter(name, encounter)
-        end
+    if nameVariant and NPCModelViewer_Indexes then
+        local idx = NPCModelViewer_Indexes
+        zone = idx.zone[nameVariant.zone]
+        ntype = idx.type[nameVariant.type]
+        family = idx.family[nameVariant.family]
+        classification = idx.classification[nameVariant.class]
+        patch = idx.patch[nameVariant.patch]
+        tameable = nameVariant.tameable
+        encounter = idx.encounters[nameVariant.encounter]
+        instance = idx.instance[nameVariant.instance]
     end
 
     self:UpdateDetails(name, npcId, dispId, zone, ntype, family, classification, patch, tameable, encounter, instance)
 
     -- Update Counters
-    local npcCount = #self._curNpcIds
-    local npcIdx = self._curNpcIdx
-    if npcCount == 0 then npcIdx = 0 end
-    self.npcCounter:SetText(("%d / %d"):format(npcIdx, npcCount))
-    self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
-    self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
+    local count = self._curResults and #self._curResults or 0
+    local idx = self._curResultIdx or 0
+    self.npcCounter:SetText(("%d / %d"):format(idx, count))
+    self.npcPrev:GetNormalTexture():SetDesaturated(count <= 1)
+    self.npcNext:GetNormalTexture():SetDesaturated(count <= 1)
 
-    local dispCount = #self._curDispIds
-    local dispIdx = self._curDispIdx
-    if dispCount == 0 then dispIdx = 0 end
-    self.dispCounter:SetText(("%d / %d"):format(dispIdx, dispCount))
-    self.dispPrev:GetNormalTexture():SetDesaturated(dispCount <= 1)
-    self.dispNext:GetNormalTexture():SetDesaturated(dispCount <= 1)
+    -- Display counter is now redundant since results are already per DisplayID variant
+    self.dispCounter:SetText("-")
+    self.dispPrev:GetNormalTexture():SetDesaturated(true)
+    self.dispNext:GetNormalTexture():SetDesaturated(true)
 
     -- Handle Lack of IDs or Visuals
     local warning = ""
@@ -699,21 +699,18 @@ function ModelViewer:SyncState()
 
     if dispId == "NoData" then
         showNoModel = true
-    elseif dispCount == 0 and (npcId ~= "-" or name ~= "-") then
-        warning = "Warning: No Display IDs found"
-        showNoModel = true
-    elseif npcId == "-" and dispId == "-" and name ~= "-" then
-        warning = "Warning: Entry found but no IDs available"
+    elseif count == 0 and name ~= "-" then
+        warning = "Warning: No data found"
         showNoModel = true
     end
 
     self.warningLabel:SetText(warning)
     self.noModelWarning:SetShown(showNoModel)
 
-    if not showNoModel and dispId ~= "-" and dispId ~= self._lastDisplayedId then
+    if not showNoModel and type(dispId) == "number" and dispId ~= self._lastDisplayedId then
         self.model:SetDisplayInfo(dispId)
         self._lastDisplayedId = dispId
-    elseif showNoModel or dispId == "-" then
+    elseif showNoModel or dispId == "-" or dispId == "NoData" then
         self.model:ClearModel()
         self._lastDisplayedId = nil
     end
@@ -786,17 +783,15 @@ function ModelViewer:PrevGlobal()
 end
 
 function ModelViewer:NextNpc()
-    if #self._curNpcIds <= 1 then return end
-    self._curNpcIdx = (self._curNpcIdx % #self._curNpcIds) + 1
-    self:UpdateDispListForNpc(self._curNpcIds[self._curNpcIdx])
+    if not self._curResults or #self._curResults <= 1 then return end
+    self._curResultIdx = (self._curResultIdx % #self._curResults) + 1
     self:SyncState()
 end
 
 function ModelViewer:PrevNpc()
-    if #self._curNpcIds <= 1 then return end
-    self._curNpcIdx = self._curNpcIdx - 1
-    if self._curNpcIdx < 1 then self._curNpcIdx = #self._curNpcIds end
-    self:UpdateDispListForNpc(self._curNpcIds[self._curNpcIdx])
+    if not self._curResults or #self._curResults <= 1 then return end
+    self._curResultIdx = self._curResultIdx - 1
+    if self._curResultIdx < 1 then self._curResultIdx = #self._curResults end
     self:SyncState()
 end
 
@@ -927,15 +922,17 @@ function ModelViewer:BuildGlobalIndicesIfNeeded()
         end
     end
 
-    -- 3) Master Data (NPCModelViewerAPI)
+    -- 3) Master Data
     if NPCModelViewer_Data then
-        for name, data in pairs(NPCModelViewer_Data) do
-            if data.ids then
-                for npcId, _ in pairs(data.ids) do
-                    Collect(name, npcId)
+        for _, bucket in pairs(NPCModelViewer_Data) do
+            for name, data in pairs(bucket) do
+                if data.ids then
+                    for npcId, _ in pairs(data.ids) do
+                        Collect(name, npcId)
+                    end
+                else
+                    Collect(name, nil)
                 end
-            else
-                Collect(name, nil)
             end
         end
     end
@@ -991,58 +988,46 @@ function ModelViewer:ShowSuggestions(matches)
     end
 end
 
-function ModelViewer:ComputeSuggestions(typedLower)
-    if not self._nameIndex then
-        return nil
-    end
+function ModelViewer:ComputeSuggestions(typed)
+    local results = NPCModelViewerAPI:Search(typed)
+    if not results then return {} end
 
     local matches = {}
-    local maxScan = 2500
-
-    local scanned = 0
-    for _, entry in ipairs(self._nameIndex) do
-        scanned = scanned + 1
-        if scanned > maxScan and #matches > 0 then
-            break
-        end
-
-        if entry.lower:find(typedLower, 1, true) then
-            matches[#matches + 1] = entry.name
-            if #matches >= self.MAX_SUGGEST then
-                break
-            end
+    local seen = {}
+    for _, res in ipairs(results) do
+        if not seen[res.name] then
+            table.insert(matches, res.name)
+            seen[res.name] = true
+            if #matches >= self.MAX_SUGGEST then break end
         end
     end
-
     return matches
 end
 
 function ModelViewer:ScheduleSuggestions()
-    self._pendingSuggestToken = self._pendingSuggestToken + 1
-    local token = self._pendingSuggestToken
+    if self._searchTimer then self._searchTimer:Cancel() end
 
-    C_Timer.After(0.05, function()
-        if token ~= self._pendingSuggestToken then
-            return
-        end
-        if not self.frame or not self.frame:IsShown() then
-            return
-        end
+    local typed = Trim(self.input:GetText())
+    if #typed < 2 then
+        self:HideSuggestions()
+        return
+    end
 
-        local typed = Trim(self.input:GetText())
-        if #typed < 3 then
+    self._searchTimer = C_Timer.NewTimer(0.25, function()
+        if not self.frame or not self.frame:IsShown() then return end
+
+        local currentTyped = Trim(self.input:GetText())
+        if #currentTyped < 2 then
             self:HideSuggestions()
             return
         end
 
-        self:BuildNameIndexIfNeeded()
-        if not self._nameIndex or #self._nameIndex == 0 then
+        local matches = self:ComputeSuggestions(currentTyped)
+        if #matches > 0 then
+            self:ShowSuggestions(matches)
+        else
             self:HideSuggestions()
-            return
         end
-
-        local matches = self:ComputeSuggestions(ToLowerSafe(typed))
-        self:ShowSuggestions(matches)
     end)
 end
 
@@ -1125,20 +1110,28 @@ end
 function ModelViewer:ApplyInput()
     self:Ensure()
     self:HideSuggestions()
-    self:ResetVisuals()
+    if self._searchTimer then self._searchTimer:Cancel() end
 
     local raw = Trim(self.input:GetText())
-    if raw == "" then
-        return
-    end
+    if raw == "" then return end
 
-    local numeric = ParsePositiveInt(raw)
-    if numeric then
-        self:ApplyNumeric(numeric)
-        return
+    local results = NPCModelViewerAPI:Search(raw)
+    if results then
+        self._curResults = results
+        self._curResultIdx = 1
+        self:SyncState()
+    else
+        -- Fallback for numeric IDs if no name match
+        local numeric = ParsePositiveInt(raw)
+        if numeric then
+            self:ApplyNumeric(numeric)
+        else
+            -- Clear state if no results
+            self._curResults = {}
+            self._curResultIdx = 0
+            self:SyncState()
+        end
     end
-
-    self:ApplyName(raw)
 end
 
 function ModelViewer:ApplyNumeric(numberValue)
@@ -1177,24 +1170,20 @@ function ModelViewer:ApplyNumeric(numberValue)
     end
 
     if foundName and foundName ~= "" and foundName ~= "-" then
-        self:ApplyName(foundName)
-        -- After tying to name, ensure we select the correct NPC ID in browsing state
-        for i, id in ipairs(self._curNpcIds) do
-            if id == numberValue then
-                self._curNpcIdx = i
-                self:UpdateDispListForNpc(id)
-                break
+        local results = NPCModelViewerAPI:Search(foundName)
+        if results then
+            self._curResults = results
+            -- Try to find the variant that matches the numberValue (either NPCID or DisplayID)
+            self._curResultIdx = 1
+            for i, res in ipairs(results) do
+                if res.npcId == numberValue or res.displayId == numberValue then
+                    self._curResultIdx = i
+                    break
+                end
             end
+            self:SyncState()
+            return
         end
-        -- Or if it was a Display ID
-        for i, id in ipairs(self._curDispIds) do
-            if id == numberValue then
-                self._curDispIdx = i
-                break
-            end
-        end
-        self:SyncState()
-        return
     end
 
     -- Fallback for orphaned IDs
@@ -1235,109 +1224,14 @@ function ModelViewer:ApplyNumeric(numberValue)
 end
 
 function ModelViewer:ApplyName(npcName)
-    self._lastSearchName = npcName
-    self._curNpcIds = {}
-    self._curNpcIdx = 0
-    self._curDispIds = {}
-    self._curDispIdx = 0
-
-    -- Update Global Index if found
-    self:BuildNameIndexIfNeeded()
-    local lowered = ToLowerSafe(npcName)
-    if self._nameIndex then
-        for i, entry in ipairs(self._nameIndex) do
-            if entry.lower == lowered then
-                self._curGlobalIdx = i
-                break
-            end
-        end
-    end
-
-    local npcIds = {}
-    local seen = {}
-
-    -- 1) Master Data
-    if NPCModelViewerAPI then
-        local apiNpcIds = NPCModelViewerAPI:GetNpcIdsByName(npcName)
-        if apiNpcIds then
-            for _, id in ipairs(apiNpcIds) do
-                if not seen[id] then
-                    table.insert(npcIds, id)
-                    seen[id] = true
-                end
-            end
-        end
-    end
-
-    -- 2) Lib (CreatureDisplayDB)
-    if IsCreatureDisplayDBAvailable() then
-        local ids = CreatureDisplayDB:GetNpcIdsByName(npcName)
-        if ids then
-            for _, id in ipairs(ids) do
-                if not seen[id] then
-                    table.insert(npcIds, id)
-                    seen[id] = true
-                end
-            end
-        end
-    end
-
-    -- 3) Local (SavedVariables)
-    local db = EnsureHarvestDB()
-    for _, batch in pairs(db.displayIdBatches) do
-        for _, entry in pairs(batch) do
-            if ToLowerSafe(entry.NPC_Name) == lowered then
-                if not seen[entry.NPC_ID] then
-                    table.insert(npcIds, entry.NPC_ID)
-                    seen[entry.NPC_ID] = true
-                end
-            end
-        end
-    end
-
-    table.sort(npcIds)
-    self._curNpcIds = npcIds
-    if #npcIds > 0 then
-        self._curNpcIdx = 1
-        self:UpdateDispListForNpc(npcIds[1])
+    local results = NPCModelViewerAPI:Search(npcName)
+    if results then
+        self._curResults = results
+        self._curResultIdx = 1
     else
-        -- Fallback: Check if name exists via displayIds
-        local dids = {}
-        local seenDid = {}
-
-        -- 1) Master Data
-        if NPCModelViewerAPI then
-            local apiDids = NPCModelViewerAPI:GetDisplayIdsByName(npcName)
-            if apiDids then
-                for _, id in ipairs(apiDids) do
-                    if not seenDid[id] then
-                        table.insert(dids, id)
-                        seenDid[id] = true
-                    end
-                end
-            end
-        end
-
-        -- 2) Lib
-        if IsCreatureDisplayDBAvailable() then
-            local libDids = CreatureDisplayDB:GetDisplayIdsByName(npcName)
-            if libDids then
-                for _, id in ipairs(libDids) do
-                    if not seenDid[id] then
-                        table.insert(dids, id)
-                        seenDid[id] = true
-                    end
-                end
-            end
-        end
-
-        if #dids > 0 then
-            table.sort(dids)
-            self._curDispIds = dids
-            self._curDispIdx = 1
-        end
+        self._curResults = {}
+        self._curResultIdx = 0
     end
-
     self:SyncState()
 end
 
@@ -1392,9 +1286,7 @@ function ModelViewer:BindEvents()
     end)
 
     self.input:SetScript("OnTextChanged", function(_, userInput)
-        if not userInput then
-            return
-        end
+        if not userInput then return end
         self:ScheduleSuggestions()
     end)
 
@@ -1499,6 +1391,7 @@ InitFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 InitFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
         EnsureHarvestDB()
+        NPCModelViewerAPI:Initialize()
         ImportFromCreatureDisplayDBIfNeeded()
     elseif event == "PLAYER_LOGIN" then
         HookHoverHarvestIfNeeded()

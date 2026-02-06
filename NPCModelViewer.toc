@@ -6,6 +6,7 @@
 ## OptionalDeps: CreatureDisplayDB
 ## SavedVariables: NPCModelViewerDB
 
+NPCModelViewer_indexes.lua
 NPCModelViewer_data.lua
 NPCModelViewer_CMD.lua
 NPCModelViewer.lua

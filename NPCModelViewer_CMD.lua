@@ -1,198 +1,66 @@
 -- =========================================================
 -- NPC Model Viewer API (CMD)
--- Allows other addons to query the NPC Master Data
+-- Optimized for bucket-based lazy loading and efficient search
 -- =========================================================
 
-NPCModelViewerAPI = {}
+NPCModelViewerAPI = {
+    _loadedBuckets = {},
+    _reverseIndexes = {},
+    _bucketSizeCache = {},
+    _idToNames = {},
+    _npcIdToDisplayIds = {},
+}
 
---- Returns the main data table for an NPC by name
---- @param name string The NPC name
---- @return table|nil
-function NPCModelViewerAPI:GetNpcDataByName(name)
-    if not NPCModelViewer_Data then return nil end
-    return NPCModelViewer_Data[name]
+-- Global aliases
+NPCModelData = NPCModelViewerAPI
+
+-- =========================================================
+-- Helpers
+-- =========================================================
+
+local function Normalize(query)
+    if not query then return "" end
+    -- Lowercase, trim, collapse multiple spaces
+    local q = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    q = q:gsub("%s+", " ")
+    return q
 end
 
---- Returns all known NPC IDs for a given name
---- @param name string The NPC name
---- @return table|nil array of npcIds
-function NPCModelViewerAPI:GetNpcIdsByName(name)
-    local data = self:GetNpcDataByName(name)
-    if not data or not data.ids then return nil end
-
-    local ids = {}
-    for npcId, _ in pairs(data.ids) do
-        if type(npcId) == "number" then
-            table.insert(ids, npcId)
-        end
-    end
-    table.sort(ids)
-    return ids
-end
-
---- Returns all known Display IDs for a given name
---- @param name string The NPC name
---- @return table|nil array of displayIds
-function NPCModelViewerAPI:GetDisplayIdsByName(name)
-    local data = self:GetNpcDataByName(name)
-    if not data or not data.ids then return nil end
-
-    local ids = {}
-    local seen = {}
-    for _, dIds in pairs(data.ids) do
-        for _, did in ipairs(dIds) do
-            if type(did) == "number" and not seen[did] then
-                table.insert(ids, did)
-                seen[did] = true
-            end
-        end
-    end
-    table.sort(ids)
-    return ids
-end
-
---- Returns all known Display IDs for a given NPC ID
---- @param npcId number The NPC ID
---- @return table|nil array of displayIds
-function NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId)
-    if not NPCModelViewer_Data then return nil end
-
-    -- First check if we can find it by name if we have the index
-    local names = self:GetNamesByNpcId(npcId)
-    if names then
-        for _, name in ipairs(names) do
-            local data = NPCModelViewer_Data[name]
-            if data and data.ids and data.ids[npcId] then
-                return data.ids[npcId]
-            end
-        end
-    end
-
-    -- Fallback: Build full index if not already built and search
-    if not self._npcIdToDisplayIds then
-        self:BuildNpcIdIndex()
-    end
-
-    return self._npcIdToDisplayIds[npcId]
-end
-
---- Returns the name associated with an NPC ID
---- @param npcId number The NPC ID
---- @return table|nil array of names
-function NPCModelViewerAPI:GetNamesByNpcId(npcId)
-    if not NPCModelViewer_Data then return nil end
-    if not self._idToNames then
-        self:BuildIdToNamesIndex()
-    end
-    return self._idToNames[npcId]
-end
-
--- Metadata helper
-local function GetMetadataForNpcId(data, field, npcId)
-    if not data or not data[field] then return nil end
-    for val, list in pairs(data[field]) do
-        for _, id in ipairs(list) do
-            if id == npcId then
-                return val
-            end
-        end
-    end
-    return nil
-end
-
-function NPCModelViewerAPI:GetZoneForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "zones", npcId)
-end
-
-function NPCModelViewerAPI:GetTypeForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "types", npcId)
-end
-
-function NPCModelViewerAPI:GetFamilyForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "fams", npcId)
-end
-
-function NPCModelViewerAPI:GetClassificationForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "class", npcId)
-end
-
-function NPCModelViewerAPI:GetPatchForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "patch", npcId)
-end
-
-function NPCModelViewerAPI:GetTameableForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "tame", npcId)
-end
-
-function NPCModelViewerAPI:GetEncounterForNpcId(name, npcId)
-    local data = self:GetNpcDataByName(name)
-    return GetMetadataForNpcId(data, "enc", npcId)
-end
-
-function NPCModelViewerAPI:GetInstanceForEncounter(name, encounterName)
-    local data = self:GetNpcDataByName(name)
-    if not data or not data.inst then return nil end
-    -- Note: This is an inverse lookup: Find the instance that contains this encounter
-    for inst, encounters in pairs(data.inst) do
-        for _, enc in ipairs(encounters) do
-            if enc == encounterName then
-                return inst
-            end
-        end
-    end
-    return nil
-end
-
---- Returns data for an NPC ID (compatibility with CreatureDisplayDB)
-function NPCModelViewerAPI:GetCreatureDisplayDataByNpcId(npcId)
-    local names = self:GetNamesByNpcId(npcId)
-    if names and names[1] then
-        local name = names[1]
-        local data = self:GetNpcDataByName(name)
-        if data then
-            local res = {
-                name = name,
-                npcId = npcId,
-                displayIds = data.ids[npcId],
-                zone = self:GetZoneForNpcId(name, npcId),
-                type = self:GetTypeForNpcId(name, npcId),
-                family = self:GetFamilyForNpcId(name, npcId),
-                classification = self:GetClassificationForNpcId(name, npcId),
-                patch = self:GetPatchForNpcId(name, npcId),
-                tameable = self:GetTameableForNpcId(name, npcId)
-            }
-            return res
-        end
-    end
-    return nil
-end
-
-function NPCModelViewerAPI:BuildIdToNamesIndex()
-    self._idToNames = {}
-    for name, data in pairs(NPCModelViewer_Data) do
-        if data.ids then
-            for npcId, _ in pairs(data.ids) do
-                if type(npcId) == "number" then
-                    self._idToNames[npcId] = self._idToNames[npcId] or {}
-                    table.insert(self._idToNames[npcId], name)
+function NPCModelViewerAPI:Initialize()
+    -- Build reverse maps for indexes
+    if NPCModelViewer_Indexes then
+        for category, map in pairs(NPCModelViewer_Indexes) do
+            self._reverseIndexes[category] = {}
+            for id, name in pairs(map) do
+                if type(name) == "string" then
+                    self._reverseIndexes[category][name:lower()] = id
                 end
             end
         end
     end
+
+    -- Initialize Cache in SavedVariables
+    if not NPCModelViewerDB then NPCModelViewerDB = {} end
+    if not NPCModelViewerDB.searchCache then
+        NPCModelViewerDB.searchCache = {}
+    end
+
+    -- If data is already loaded (single-file setup), build ID indexes once
+    if NPCModelViewer_Data then
+        self:BuildFullIdIndex()
+    end
 end
 
-function NPCModelViewerAPI:BuildNpcIdIndex()
+function NPCModelViewerAPI:BuildFullIdIndex()
+    self._idToNames = {}
     self._npcIdToDisplayIds = {}
-    for name, data in pairs(NPCModelViewer_Data) do
-        if data.ids then
-            for npcId, displayIds in pairs(data.ids) do
-                if type(npcId) == "number" then
+    for groupKey, bucket in pairs(NPCModelViewer_Data) do
+        self._loadedBuckets[groupKey] = true
+        for name, data in pairs(bucket) do
+            if data.ids then
+                for npcId, displayIds in pairs(data.ids) do
+                    self._idToNames[npcId] = self._idToNames[npcId] or {}
+                    table.insert(self._idToNames[npcId], name)
                     self._npcIdToDisplayIds[npcId] = displayIds
                 end
             end
@@ -200,5 +68,184 @@ function NPCModelViewerAPI:BuildNpcIdIndex()
     end
 end
 
--- Global alias
-NPCModelData = NPCModelViewerAPI
+function NPCModelViewerAPI:GetGroupKeys(q)
+    if #q < 2 then return {} end
+
+    local k2 = q:sub(1, 2):upper()
+    local k3 = q:sub(1, 3):upper()
+    local keys = {}
+
+    if NPCModelViewer_Data then
+        -- If data is loaded, look for any keys starting with k3 or k2 (including numeric suffixes)
+        for groupKey in pairs(NPCModelViewer_Data) do
+            -- Match "SHA", "SHA1", "SHA2" etc.
+            if groupKey == k3 or groupKey:match("^" .. k3 .. "%d+$") then
+                table.insert(keys, groupKey)
+            end
+        end
+
+        -- If no 3-letter keys found, look for 2-letter keys
+        if #keys == 0 then
+            for groupKey in pairs(NPCModelViewer_Data) do
+                if type(groupKey) == "string" and (groupKey == k2 or groupKey:match("^" .. k2 .. "%d+$")) then
+                    table.insert(keys, groupKey)
+                end
+            end
+        end
+    end
+
+    -- If still empty (e.g. LOD not yet loaded), we can't easily know the suffixes
+    -- so we return at least the base keys to trigger LoadBucket
+    if #keys == 0 then
+        table.insert(keys, k3)
+        table.insert(keys, k2)
+    end
+
+    return keys
+end
+
+function NPCModelViewerAPI:LoadBucket(groupKey)
+    if self._loadedBuckets[groupKey] then return true end
+
+    -- Check if it already exists in the global table (single-file setup)
+    if NPCModelViewer_Data and NPCModelViewer_Data[groupKey] then
+        self._loadedBuckets[groupKey] = true
+        return true
+    end
+
+    -- Attempt to load via LOD addon mechanism
+    local addonName = "NPCModelViewer_Data_" .. groupKey
+    -- Some addons might be named without the suffix if only one exists
+    -- But we follow the groupKey exactly
+    if C_AddOns.IsAddOnLoadable(addonName) then
+        local loaded, reason = C_AddOns.LoadAddOn(addonName)
+        if loaded then
+            self._loadedBuckets[groupKey] = true
+            return true
+        end
+    end
+
+    return false
+end
+
+-- =========================================================
+-- Search Implementation
+-- =========================================================
+
+function NPCModelViewerAPI:Search(query)
+    local q = Normalize(query)
+    if #q < 2 then return nil end
+
+    -- Check Cache
+    local cache = NPCModelViewerDB.searchCache
+    for i, entry in ipairs(cache) do
+        if entry.q == q then
+            table.remove(cache, i)
+            table.insert(cache, 1, entry)
+            return entry.results
+        end
+    end
+
+    -- Find Buckets
+    local groupKeys = self:GetGroupKeys(q)
+    if #groupKeys == 0 then return nil end
+
+    local results = {}
+    local exactMatch = nil
+    local searchedBuckets = {}
+
+    for _, groupKey in ipairs(groupKeys) do
+        if not searchedBuckets[groupKey] then
+            self:LoadBucket(groupKey)
+            searchedBuckets[groupKey] = true
+
+            local bucket = NPCModelViewer_Data and NPCModelViewer_Data[groupKey]
+            if bucket then
+                -- 1. Exact Match Scan
+                for realName, data in pairs(bucket) do
+                    if Normalize(realName) == q then
+                        self:AppendResults(results, realName, data)
+                        exactMatch = true
+                        -- Keep searching other buckets just in case of duplicates or variants
+                    end
+                end
+
+                -- 2. Prefix/Contains Scan (only if no exact match found yet or we want more)
+                if not exactMatch or #results < 10 then
+                    for realName, data in pairs(bucket) do
+                        local normName = Normalize(realName)
+                        if normName:find(q, 1, true) and normName ~= q then
+                            self:AppendResults(results, realName, data)
+                            if #results > 100 then break end
+                        end
+                    end
+                end
+            end
+            if #results > 100 then break end
+        end
+    end
+
+    if #results > 0 then
+        -- Cache results
+        table.insert(cache, 1, { q = q, results = results })
+        while #cache > 20 do table.remove(cache) end
+        return results
+    end
+
+    return nil
+end
+
+function NPCModelViewerAPI:AppendResults(results, name, data)
+    for npcId, displayIds in pairs(data.ids) do
+        local idList = type(displayIds) == "table" and displayIds or { displayIds }
+        local encounterId = self:GetMetadataValue(data, "enc", npcId)
+        local instanceId = encounterId and self:GetMetadataValue(data, "inst", encounterId)
+
+        for _, dispId in ipairs(idList) do
+            table.insert(results, {
+                name = name,
+                npcId = npcId,
+                displayId = dispId,
+                zone = self:GetMetadataValue(data, "zones", npcId),
+                type = self:GetMetadataValue(data, "types", npcId),
+                family = self:GetMetadataValue(data, "fams", npcId),
+                class = self:GetMetadataValue(data, "class", npcId),
+                patch = self:GetMetadataValue(data, "patch", npcId),
+                instance = instanceId,
+                encounter = encounterId,
+                tameable = self:GetMetadataValue(data, "tame", npcId),
+            })
+        end
+    end
+end
+
+function NPCModelViewerAPI:GetMetadataValue(data, field, npcId)
+    if not data or not data[field] then return nil end
+    for labelId, npcList in pairs(data[field]) do
+        if type(npcList) == "table" then
+            for _, id in ipairs(npcList) do
+                if id == npcId then return labelId end
+            end
+        elseif npcList == npcId then
+            return labelId
+        end
+    end
+    return nil
+end
+
+-- =========================================================
+-- Legacy & ID Lookups
+-- =========================================================
+
+function NPCModelViewerAPI:GetNamesByNpcId(npcId)
+    return self._idToNames[npcId]
+end
+
+function NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId)
+    return self._npcIdToDisplayIds[npcId]
+end
+
+function NPCModelViewerAPI:GetNpcDataByName(name)
+    local res = self:Search(name)
+    return res and res[1] -- Return first variant for legacy support
+end
