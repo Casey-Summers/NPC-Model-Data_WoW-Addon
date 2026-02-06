@@ -41,9 +41,8 @@ function NPCModelViewerAPI:Initialize()
 
     -- Initialize Cache in SavedVariables
     if not NPCModelViewerDB then NPCModelViewerDB = {} end
-    if not NPCModelViewerDB.searchCache then
-        NPCModelViewerDB.searchCache = {}
-    end
+    -- Clear cache to ensure new sorting logic applies immediately
+    NPCModelViewerDB.searchCache = {}
 
     -- If data is already loaded (single-file setup), build ID indexes once
     if NPCModelViewer_Data then
@@ -153,6 +152,7 @@ function NPCModelViewerAPI:Search(query)
     local results = {}
     local exactMatch = nil
     local searchedBuckets = {}
+    local seenPairs = {} -- For duplicate filtering
 
     for _, groupKey in ipairs(groupKeys) do
         if not searchedBuckets[groupKey] then
@@ -164,9 +164,8 @@ function NPCModelViewerAPI:Search(query)
                 -- 1. Exact Match Scan
                 for realName, data in pairs(bucket) do
                     if Normalize(realName) == q then
-                        self:AppendResults(results, realName, data)
+                        self:AppendResults(results, realName, data, seenPairs)
                         exactMatch = true
-                        -- Keep searching other buckets just in case of duplicates or variants
                     end
                 end
 
@@ -175,7 +174,7 @@ function NPCModelViewerAPI:Search(query)
                     for realName, data in pairs(bucket) do
                         local normName = Normalize(realName)
                         if normName:find(q, 1, true) and normName ~= q then
-                            self:AppendResults(results, realName, data)
+                            self:AppendResults(results, realName, data, seenPairs)
                             if #results > 100 then break end
                         end
                     end
@@ -186,6 +185,28 @@ function NPCModelViewerAPI:Search(query)
     end
 
     if #results > 0 then
+        -- GLOBAL SORT: Ensure variants are always presented in ascending order
+        table.sort(results, function(a, b)
+            -- Primary sort: Name (alphabetical)
+            if a.name ~= b.name then
+                return a.name < b.name
+            end
+            -- Secondary sort: NPC ID (numeric ascending)
+            local na, nb = tonumber(a.npcId), tonumber(b.npcId)
+            if na and nb and na ~= nb then
+                return na < nb
+            end
+            if tostring(a.npcId) ~= tostring(b.npcId) then
+                return tostring(a.npcId) < tostring(b.npcId)
+            end
+            -- Tertiary sort: Display ID (numeric ascending)
+            local da, db = tonumber(a.displayId), tonumber(b.displayId)
+            if da and db and da ~= db then
+                return da < db
+            end
+            return tostring(a.displayId) < tostring(b.displayId)
+        end)
+
         -- Cache results
         table.insert(cache, 1, { q = q, results = results })
         while #cache > 20 do table.remove(cache) end
@@ -195,26 +216,57 @@ function NPCModelViewerAPI:Search(query)
     return nil
 end
 
-function NPCModelViewerAPI:AppendResults(results, name, data)
-    for npcId, displayIds in pairs(data.ids) do
-        local idList = type(displayIds) == "table" and displayIds or { displayIds }
+function NPCModelViewerAPI:AppendResults(results, name, data, seenPairs)
+    local sortedNpcIds = {}
+    for npcId in pairs(data.ids) do
+        table.insert(sortedNpcIds, npcId)
+    end
+    table.sort(sortedNpcIds, function(a, b)
+        if a == "NoData" then return false end
+        if b == "NoData" then return true end
+        local na, nb = tonumber(a), tonumber(b)
+        if na and nb then return na < nb end
+        return tostring(a) < tostring(b)
+    end)
+
+    for _, npcId in ipairs(sortedNpcIds) do
+        local displayIds = data.ids[npcId]
+        local idList = {}
+        if type(displayIds) == "table" then
+            for _, did in ipairs(displayIds) do table.insert(idList, did) end
+        else
+            table.insert(idList, displayIds)
+        end
+        table.sort(idList, function(a, b)
+            if a == "NoData" then return false end
+            if b == "NoData" then return true end
+            local na, nb = tonumber(a), tonumber(b)
+            if na and nb then return na < nb end
+            return tostring(a) < tostring(b)
+        end)
+
         local encounterId = self:GetMetadataValue(data, "enc", npcId)
         local instanceId = encounterId and self:GetMetadataValue(data, "inst", encounterId)
 
         for _, dispId in ipairs(idList) do
-            table.insert(results, {
-                name = name,
-                npcId = npcId,
-                displayId = dispId,
-                zone = self:GetMetadataValue(data, "zones", npcId),
-                type = self:GetMetadataValue(data, "types", npcId),
-                family = self:GetMetadataValue(data, "fams", npcId),
-                class = self:GetMetadataValue(data, "class", npcId),
-                patch = self:GetMetadataValue(data, "patch", npcId),
-                instance = instanceId,
-                encounter = encounterId,
-                tameable = self:GetMetadataValue(data, "tame", npcId),
-            })
+            -- Explicit Filtering: Ensure no duplicate NPCID+DisplayID pairs for the same name
+            local key = name .. "_" .. tostring(npcId) .. "_" .. tostring(dispId)
+            if not seenPairs[key] then
+                seenPairs[key] = true
+                table.insert(results, {
+                    name = name,
+                    npcId = npcId,
+                    displayId = dispId,
+                    zone = self:GetMetadataValue(data, "zones", npcId),
+                    type = self:GetMetadataValue(data, "types", npcId),
+                    family = self:GetMetadataValue(data, "fams", npcId),
+                    class = self:GetMetadataValue(data, "class", npcId),
+                    patch = self:GetMetadataValue(data, "patch", npcId),
+                    instance = instanceId,
+                    encounter = encounterId,
+                    tameable = self:GetMetadataValue(data, "tame", npcId),
+                })
+            end
         end
     end
 end
