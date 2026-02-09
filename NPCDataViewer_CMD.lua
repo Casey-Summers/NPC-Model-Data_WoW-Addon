@@ -185,8 +185,8 @@ function NPCDataViewerAPI:Search(query)
                         end
                     end
 
-                    -- 2. Prefix/Contains Scan (only if no exact match found yet or we want more)
-                    if not exactMatch or #results < 10 then
+                    -- 2. Prefix/Contains Scan (only if no exact match found yet)
+                    if not exactMatch then
                         for realName, data in pairs(bucket) do
                             local normName = Normalize(realName)
                             if normName:find(q, 1, true) and normName ~= q then
@@ -200,6 +200,7 @@ function NPCDataViewerAPI:Search(query)
             end
         end
         if #results > 100 then break end
+        if exactMatch then break end -- Stop if we found exact matches
     end
 
     if #results > 0 then

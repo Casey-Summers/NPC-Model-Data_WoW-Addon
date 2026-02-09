@@ -299,6 +299,7 @@ function ModelViewer:Ensure()
 
     -- Model interaction state
     self.modelRotation = 0
+    self.modelPitch = 0    -- Added pitch state
     self.modelPosition = { x = 0, y = 0, z = 0 }
     self.modelDistance = 0 -- Default zoom level (0 = normal view)
     self.isRotating = false
@@ -309,8 +310,9 @@ function ModelViewer:Ensure()
     model:SetScript("OnMouseDown", function(self, button)
         if button == "LeftButton" then
             ModelViewer.isDragging = true
-            ModelViewer.dragStartX = GetCursorPosition()
+            ModelViewer.dragStartX, ModelViewer.dragStartY = GetCursorPosition()
             ModelViewer.dragStartRotation = ModelViewer.modelRotation
+            ModelViewer.dragStartPitch = ModelViewer.modelPitch
         elseif button == "RightButton" then
             ModelViewer.isTranslating = true
             ModelViewer.dragStartX, ModelViewer.dragStartY = GetCursorPosition()
@@ -336,10 +338,23 @@ function ModelViewer:Ensure()
 
         -- Manual rotation
         if ModelViewer.isDragging then
-            local cursorX = GetCursorPosition()
-            local delta = (cursorX - ModelViewer.dragStartX) * 0.01
-            ModelViewer.modelRotation = (ModelViewer.dragStartRotation + delta) % (math.pi * 2)
+            local cursorX, cursorY = GetCursorPosition()
+
+            -- Horizontal rotation (Facing)
+            local deltaX = (cursorX - ModelViewer.dragStartX) * 0.01
+            ModelViewer.modelRotation = (ModelViewer.dragStartRotation + deltaX) % (math.pi * 2)
             self:SetFacing(ModelViewer.modelRotation)
+
+            -- Vertical rotation (Pitch)
+            local deltaY = (cursorY - ModelViewer.dragStartY) * 0.01
+            ModelViewer.modelPitch = (ModelViewer.dragStartPitch - deltaY) -- Inverted for natural feel
+            -- Clamping pitch to prevent flipping or extreme angles
+            if ModelViewer.modelPitch > 1.5 then ModelViewer.modelPitch = 1.5 end
+            if ModelViewer.modelPitch < -1.5 then ModelViewer.modelPitch = -1.5 end
+
+            if self.SetPitch then
+                self:SetPitch(ModelViewer.modelPitch)
+            end
         end
 
         -- Manual translation
@@ -373,7 +388,8 @@ function ModelViewer:Ensure()
 
     local function CreateControlButton(parent, atlas, tooltip, size)
         local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-        btn:SetSize(size or 28, size or 28)
+        local btnSize = size or 28
+        btn:SetSize(btnSize, btnSize)
         btn:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8x8",
             edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -382,14 +398,24 @@ function ModelViewer:Ensure()
         btn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
         btn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
 
+        -- Always provide a label so callers can safely do btn.label:SetText(...)
+        local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetPoint("CENTER")
+        label:SetText("")
+        label:SetTextColor(0.9, 0.9, 0.9)
+        btn.label = label
+
         if atlas then
             local tex = btn:CreateTexture(nil, "ARTWORK")
             tex:SetPoint("CENTER")
-            tex:SetSize((size or 28) - 6, (size or 28) - 6)
+            tex:SetSize(btnSize - 6, btnSize - 6)
             tex:SetAtlas(atlas)
             tex:SetVertexColor(0.7, 0.7, 0.7)
             btn.tex = tex
             btn.isAtlas = true
+
+            -- Icon buttons generally don't need text displayed
+            label:Hide()
         end
 
         btn:SetScript("OnEnter", function(self)
@@ -397,6 +423,9 @@ function ModelViewer:Ensure()
             self:SetBackdropBorderColor(0.8, 0.6, 0, 1)
             if self.tex then
                 self.tex:SetVertexColor(1, 0.82, 0)
+            end
+            if self.label and self.label:IsShown() then
+                self.label:SetTextColor(1, 0.82, 0)
             end
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:SetText(tooltip, 1, 1, 1)
@@ -409,11 +438,41 @@ function ModelViewer:Ensure()
             if self.tex then
                 self.tex:SetVertexColor(0.7, 0.7, 0.7)
             end
+            if self.label and self.label:IsShown() then
+                self.label:SetTextColor(0.9, 0.9, 0.9)
+            end
             GameTooltip:Hide()
         end)
 
         return btn
     end
+
+    -- Auto-Rotation Toggle (Bottom Right)
+    local autoRotateBtn = CreateControlButton(modelContainer, nil, "Toggle Auto-Rotation", 26)
+    autoRotateBtn:SetPoint("BOTTOMRIGHT", -8, 8)
+    autoRotateBtn:SetFrameLevel(model:GetFrameLevel() + 10)
+    autoRotateBtn.label:SetText("AUTO")
+    autoRotateBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
+
+    local function UpdateToggleVisual()
+        local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
+        if settings and settings.autoRotate then
+            autoRotateBtn:SetBackdropBorderColor(0, 1, 0, 1)
+            autoRotateBtn.label:SetTextColor(0, 1, 0)
+        else
+            autoRotateBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+            autoRotateBtn.label:SetTextColor(0.6, 0.6, 0.6)
+        end
+    end
+
+    autoRotateBtn:SetScript("OnClick", function()
+        if NPCDataViewerOptions then
+            local settings = NPCDataViewerOptions:GetSettings()
+            settings.autoRotate = not settings.autoRotate
+            UpdateToggleVisual()
+        end
+    end)
+    frame:SetScript("OnShow", UpdateToggleVisual) -- Sync on show
 
     local rotateLeftBtn = CreateControlButton(controlBar, "shop-header-arrow-hover", "Rotate Left")
     rotateLeftBtn:SetPoint("LEFT", 0, 0)
@@ -474,9 +533,11 @@ function ModelViewer:Ensure()
     end)
     resetBtn:SetScript("OnClick", function()
         ModelViewer.modelRotation = 0
+        ModelViewer.modelPitch = 0
         ModelViewer.modelPosition = { x = 0, y = 0, z = 0 }
         ModelViewer.modelDistance = 0 -- Reset to default zoom level
         model:SetFacing(0)
+        if model.SetPitch then model:SetPitch(0) end
         model:SetPosition(0, 0, 0)
         model:SetPortraitZoom(0) -- 0 = default view
     end)
@@ -643,17 +704,55 @@ function ModelViewer:SyncState()
 
     self:UpdateDetails(name, npcId, dispId, zone, ntype, family, classification, patch, tameable, encounter, instance)
 
-    -- Update Counters
-    local count = self._curResults and #self._curResults or 0
-    local idx = self._curResultIdx or 0
-    self.npcCounter:SetText(("%d / %d"):format(idx, count))
-    self.npcPrev:GetNormalTexture():SetDesaturated(count <= 1)
-    self.npcNext:GetNormalTexture():SetDesaturated(count <= 1)
+    -- Group variants by NPC ID for hierarchical navigation
+    local uniqueNpcs = {}
+    local npcToVariants = {}
+    if self._curResults then
+        local seenNpc = {}
+        for _, res in ipairs(self._curResults) do
+            if not seenNpc[res.npcId] then
+                table.insert(uniqueNpcs, res.npcId)
+                seenNpc[res.npcId] = true
+            end
+            npcToVariants[res.npcId] = npcToVariants[res.npcId] or {}
+            table.insert(npcToVariants[res.npcId], res)
+        end
+    end
 
-    -- Display counter is now redundant since results are already per DisplayID variant
-    self.dispCounter:SetText("-")
-    self.dispPrev:GetNormalTexture():SetDesaturated(true)
-    self.dispNext:GetNormalTexture():SetDesaturated(true)
+    -- Update Counters
+    local npcCount = #uniqueNpcs
+    local currentNpcIdx = 0
+    local dispCount = 0
+    local currentDispIdx = 0
+
+    if npcId ~= "-" then
+        for i, id in ipairs(uniqueNpcs) do
+            if id == npcId then
+                currentNpcIdx = i
+                break
+            end
+        end
+
+        local variants = npcToVariants[npcId] or {}
+        dispCount = #variants
+        for i, var in ipairs(variants) do
+            if var.displayId == dispId then
+                currentDispIdx = i
+                break
+            end
+        end
+    end
+
+    self.npcCounter:SetText(("%d / %d"):format(currentNpcIdx, npcCount))
+    self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
+    self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
+
+    -- Display ID counter now shows position within ALL variants for this Name
+    local totalVariants = self._curResults and #self._curResults or 0
+    local variantIdx = self._curResultIdx or 0
+    self.dispCounter:SetText(("%d / %d"):format(variantIdx, totalVariants))
+    self.dispPrev:GetNormalTexture():SetDesaturated(totalVariants <= 1)
+    self.dispNext:GetNormalTexture():SetDesaturated(totalVariants <= 1)
 
     -- Handle Lack of IDs or Visuals
     local warning = ""
@@ -661,7 +760,7 @@ function ModelViewer:SyncState()
 
     if dispId == "NoData" then
         showNoModel = true
-    elseif count == 0 and name ~= "-" then
+    elseif npcCount == 0 and name ~= "-" then
         warning = "Warning: No data found"
         showNoModel = true
     end
@@ -735,24 +834,27 @@ function ModelViewer:NextGlobal()
     self:BuildGlobalIdIndexIfNeeded()
     if not self._idIndex or #self._idIndex == 0 then return end
 
-    -- Check if we are currently viewing an NPC not in the index
     local nameVariant = self._curResults and self._curResults[self._curResultIdx]
     local currentId = nameVariant and nameVariant.npcId
 
-    if currentId then
-        -- Find where we are relative to the index
+    local nextId = self._idIndex[1]
+    if currentId and type(currentId) == "number" then
         for i, id in ipairs(self._idIndex) do
-            if id >= currentId then
+            if id > currentId then
+                nextId = id
                 self._curGlobalIdx = i
                 break
             end
         end
+        -- If no id > currentId was found, loop to start
+        if nextId == self._idIndex[1] and currentId >= self._idIndex[#self._idIndex] then
+            nextId = self._idIndex[1]
+            self._curGlobalIdx = 1
+        end
     end
 
-    self._curGlobalIdx = (self._curGlobalIdx % #self._idIndex) + 1
-    local npcId = self._idIndex[self._curGlobalIdx]
-    self.input:SetText(tostring(npcId))
-    self:ApplyNumeric(npcId)
+    self.input:SetText(tostring(nextId))
+    self:ApplyNumeric(nextId)
 end
 
 function ModelViewer:PrevGlobal()
@@ -762,45 +864,89 @@ function ModelViewer:PrevGlobal()
     local nameVariant = self._curResults and self._curResults[self._curResultIdx]
     local currentId = nameVariant and nameVariant.npcId
 
-    if currentId then
+    local prevId = self._idIndex[#self._idIndex]
+    if currentId and type(currentId) == "number" then
         for i = #self._idIndex, 1, -1 do
-            if self._idIndex[i] <= currentId then
+            if self._idIndex[i] < currentId then
+                prevId = self._idIndex[i]
                 self._curGlobalIdx = i
                 break
             end
         end
+        -- If no id < currentId was found, loop to end
+        if prevId == self._idIndex[#self._idIndex] and currentId <= self._idIndex[1] then
+            prevId = self._idIndex[#self._idIndex]
+            self._curGlobalIdx = #self._idIndex
+        end
     end
 
-    self._curGlobalIdx = self._curGlobalIdx - 1
-    if self._curGlobalIdx < 1 then self._curGlobalIdx = #self._idIndex end
-    local npcId = self._idIndex[self._curGlobalIdx]
-    self.input:SetText(tostring(npcId))
-    self:ApplyNumeric(npcId)
+    self.input:SetText(tostring(prevId))
+    self:ApplyNumeric(prevId)
 end
 
 function ModelViewer:NextNpc()
+    if not self._curResults or #self._curResults == 0 then return end
+
+    local currentNpcId = self._curResults[self._curResultIdx].npcId
+    local nextIdx = self._curResultIdx
+
+    -- Find the next entry with a different NPC ID
+    local found = false
+    for i = 1, #self._curResults do
+        local checkIdx = (self._curResultIdx + i - 1) % #self._curResults + 1
+        if self._curResults[checkIdx].npcId ~= currentNpcId then
+            nextIdx = checkIdx
+            found = true
+            break
+        end
+    end
+
+    -- If no different NPC ID found, just stay or treat as infinite loop to same
+    if not found then nextIdx = self._curResultIdx end
+
+    self._curResultIdx = nextIdx
+    self:SyncState()
+end
+
+function ModelViewer:PrevNpc()
+    if not self._curResults or #self._curResults == 0 then return end
+
+    local currentNpcId = self._curResults[self._curResultIdx].npcId
+    local prevIdx = self._curResultIdx
+
+    -- Find the previous entry with a different NPC ID
+    -- We want the FIRST variant of the PREVIOUS NPC group
+    local foundNpcId = nil
+    for i = 1, #self._curResults do
+        local checkIdx = (self._curResultIdx - i - 1 + #self._curResults) % #self._curResults + 1
+        local id = self._curResults[checkIdx].npcId
+        if id ~= currentNpcId then
+            foundNpcId = id
+            -- Now find the FIRST instance of this NPC ID in results
+            for j, res in ipairs(self._curResults) do
+                if res.npcId == foundNpcId then
+                    prevIdx = j
+                    break
+                end
+            end
+            break
+        end
+    end
+
+    self._curResultIdx = prevIdx
+    self:SyncState()
+end
+
+function ModelViewer:NextDisp()
     if not self._curResults or #self._curResults <= 1 then return end
     self._curResultIdx = (self._curResultIdx % #self._curResults) + 1
     self:SyncState()
 end
 
-function ModelViewer:PrevNpc()
+function ModelViewer:PrevDisp()
     if not self._curResults or #self._curResults <= 1 then return end
     self._curResultIdx = self._curResultIdx - 1
     if self._curResultIdx < 1 then self._curResultIdx = #self._curResults end
-    self:SyncState()
-end
-
-function ModelViewer:NextDisp()
-    if #self._curDispIds <= 1 then return end
-    self._curDispIdx = (self._curDispIdx % #self._curDispIds) + 1
-    self:SyncState()
-end
-
-function ModelViewer:PrevDisp()
-    if #self._curDispIds <= 1 then return end
-    self._curDispIdx = self._curDispIdx - 1
-    if self._curDispIdx < 1 then self._curDispIdx = #self._curDispIds end
     self:SyncState()
 end
 

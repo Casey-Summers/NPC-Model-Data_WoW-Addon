@@ -1,4 +1,4 @@
-## Interface: 120001
+## Interface: 120000
 ## Title: NPC Data Viewer
 ## Notes: Provides all known details for a searched NPC.
 ## Author: Aceman
