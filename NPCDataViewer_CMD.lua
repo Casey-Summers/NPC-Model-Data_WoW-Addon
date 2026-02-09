@@ -1,9 +1,9 @@
 -- =========================================================
--- NPC Model Viewer API (CMD)
+-- NPC Data Viewer API (CMD)
 -- Optimized for bucket-based lazy loading and efficient search
 -- =========================================================
 
-NPCModelViewerAPI = {
+NPCDataViewerAPI = {
     _loadedBuckets = {},
     _reverseIndexes = {},
     _bucketSizeCache = {},
@@ -12,7 +12,9 @@ NPCModelViewerAPI = {
 }
 
 -- Global aliases
-NPCModelData = NPCModelViewerAPI
+NPCDataViewer = NPCDataViewerAPI
+NPCModelViewer = NPCDataViewerAPI    -- Legacy support
+NPCModelViewerAPI = NPCDataViewerAPI -- Legacy support
 
 -- =========================================================
 -- Helpers
@@ -26,10 +28,10 @@ local function Normalize(query)
     return q
 end
 
-function NPCModelViewerAPI:Initialize()
+function NPCDataViewerAPI:Initialize()
     -- Build reverse maps for indexes
-    if NPCModelViewer_Indexes then
-        for category, map in pairs(NPCModelViewer_Indexes) do
+    if NPCDataViewer_Indexes then
+        for category, map in pairs(NPCDataViewer_Indexes) do
             self._reverseIndexes[category] = {}
             for id, name in pairs(map) do
                 if type(name) == "string" then
@@ -40,20 +42,20 @@ function NPCModelViewerAPI:Initialize()
     end
 
     -- Initialize Cache in SavedVariables
-    if not NPCModelViewerDB then NPCModelViewerDB = {} end
+    if not NPCDataViewerDB then NPCDataViewerDB = {} end
     -- Clear cache to ensure new sorting logic applies immediately
-    NPCModelViewerDB.searchCache = {}
+    NPCDataViewerDB.searchCache = {}
 
     -- If data is already loaded (single-file setup), build ID indexes once
-    if NPCModelViewer_Data then
+    if NPCDataViewer_Data then
         self:BuildFullIdIndex()
     end
 end
 
-function NPCModelViewerAPI:BuildFullIdIndex()
+function NPCDataViewerAPI:BuildFullIdIndex()
     self._idToNames = {}
     self._npcIdToDisplayIds = {}
-    for groupKey, bucket in pairs(NPCModelViewer_Data) do
+    for groupKey, bucket in pairs(NPCDataViewer_Data) do
         self._loadedBuckets[groupKey] = true
         for name, data in pairs(bucket) do
             if data.ids then
@@ -67,56 +69,69 @@ function NPCModelViewerAPI:BuildFullIdIndex()
     end
 end
 
-function NPCModelViewerAPI:GetGroupKeys(q)
-    if #q < 2 then return {} end
+function NPCDataViewerAPI:GetGroupKeys(q)
+    if #q < 3 then return {} end
 
-    local k2 = q:sub(1, 2):upper()
-    local k3 = q:sub(1, 3):upper()
     local keys = {}
+    -- Probing prefixes of 1, 2, and 3 characters
+    for i = 1, math.min(3, #q) do
+        local prefix = q:sub(1, i):upper()
+        local baseAddon = "NPCDataViewer_Data_" .. prefix
+        local segAddon = "NPCDataViewer_Data_" .. prefix .. "1"
 
-    if NPCModelViewer_Data then
-        -- If data is loaded, look for any keys starting with k3 or k2 (including numeric suffixes)
-        for groupKey in pairs(NPCModelViewer_Data) do
-            -- Match "SHA", "SHA1", "SHA2" etc.
-            if groupKey == k3 or groupKey:match("^" .. k3 .. "%d+$") then
-                table.insert(keys, groupKey)
-            end
-        end
-
-        -- If no 3-letter keys found, look for 2-letter keys
-        if #keys == 0 then
-            for groupKey in pairs(NPCModelViewer_Data) do
-                if type(groupKey) == "string" and (groupKey == k2 or groupKey:match("^" .. k2 .. "%d+$")) then
-                    table.insert(keys, groupKey)
-                end
-            end
+        -- Probe for existence (either base or first segment)
+        if C_AddOns.GetAddOnInfo(baseAddon) or C_AddOns.GetAddOnInfo(segAddon) then
+            table.insert(keys, prefix)
+        elseif NPCDataViewer_Data and (NPCDataViewer_Data[prefix] or NPCDataViewer_Data[prefix .. "1"]) then
+            -- Fallback for already loaded or single-file data
+            table.insert(keys, prefix)
         end
     end
 
-    -- If still empty (e.g. LOD not yet loaded), we can't easily know the suffixes
-    -- so we return at least the base keys to trigger LoadBucket
+    -- If no matches found yet, return base prefixes to trigger LoadBucket discovery
     if #keys == 0 then
-        table.insert(keys, k3)
-        table.insert(keys, k2)
+        table.insert(keys, q:sub(1, 3):upper())
+        table.insert(keys, q:sub(1, 2):upper())
     end
 
     return keys
 end
 
-function NPCModelViewerAPI:LoadBucket(groupKey)
+function NPCDataViewerAPI:LoadBucket(prefix)
+    local actualKeys = {}
+
+    -- 1. Try Base Key
+    if self:_TryLoad(prefix) then
+        table.insert(actualKeys, prefix)
+    end
+
+    -- 2. Try Segmented Keys (Prefix1, Prefix2, ...)
+    local i = 1
+    while true do
+        local segKey = prefix .. i
+        if self:_TryLoad(segKey) then
+            table.insert(actualKeys, segKey)
+            i = i + 1
+        else
+            break
+        end
+    end
+
+    return actualKeys
+end
+
+function NPCDataViewerAPI:_TryLoad(groupKey)
     if self._loadedBuckets[groupKey] then return true end
 
     -- Check if it already exists in the global table (single-file setup)
-    if NPCModelViewer_Data and NPCModelViewer_Data[groupKey] then
+    if NPCDataViewer_Data and NPCDataViewer_Data[groupKey] then
         self._loadedBuckets[groupKey] = true
         return true
     end
 
     -- Attempt to load via LOD addon mechanism
-    local addonName = "NPCModelViewer_Data_" .. groupKey
-    -- Some addons might be named without the suffix if only one exists
-    -- But we follow the groupKey exactly
-    if C_AddOns.IsAddOnLoadable(addonName) then
+    local addonName = "NPCDataViewer_Data_" .. groupKey
+    if C_AddOns.GetAddOnInfo(addonName) then
         local loaded, reason = C_AddOns.LoadAddOn(addonName)
         if loaded then
             self._loadedBuckets[groupKey] = true
@@ -131,12 +146,12 @@ end
 -- Search Implementation
 -- =========================================================
 
-function NPCModelViewerAPI:Search(query)
+function NPCDataViewerAPI:Search(query)
     local q = Normalize(query)
-    if #q < 2 then return nil end
+    if #q < 3 then return nil end
 
     -- Check Cache
-    local cache = NPCModelViewerDB.searchCache
+    local cache = NPCDataViewerDB.searchCache
     for i, entry in ipairs(cache) do
         if entry.q == q then
             table.remove(cache, i)
@@ -146,42 +161,45 @@ function NPCModelViewerAPI:Search(query)
     end
 
     -- Find Buckets
-    local groupKeys = self:GetGroupKeys(q)
-    if #groupKeys == 0 then return nil end
+    local prefixes = self:GetGroupKeys(q)
+    if #prefixes == 0 then return nil end
 
     local results = {}
     local exactMatch = nil
     local searchedBuckets = {}
     local seenPairs = {} -- For duplicate filtering
 
-    for _, groupKey in ipairs(groupKeys) do
-        if not searchedBuckets[groupKey] then
-            self:LoadBucket(groupKey)
-            searchedBuckets[groupKey] = true
+    for _, prefix in ipairs(prefixes) do
+        local groupKeys = self:LoadBucket(prefix)
+        for _, groupKey in ipairs(groupKeys) do
+            if not searchedBuckets[groupKey] then
+                searchedBuckets[groupKey] = true
 
-            local bucket = NPCModelViewer_Data and NPCModelViewer_Data[groupKey]
-            if bucket then
-                -- 1. Exact Match Scan
-                for realName, data in pairs(bucket) do
-                    if Normalize(realName) == q then
-                        self:AppendResults(results, realName, data, seenPairs)
-                        exactMatch = true
-                    end
-                end
-
-                -- 2. Prefix/Contains Scan (only if no exact match found yet or we want more)
-                if not exactMatch or #results < 10 then
+                local bucket = NPCDataViewer_Data and NPCDataViewer_Data[groupKey]
+                if bucket then
+                    -- 1. Exact Match Scan
                     for realName, data in pairs(bucket) do
-                        local normName = Normalize(realName)
-                        if normName:find(q, 1, true) and normName ~= q then
+                        if Normalize(realName) == q then
                             self:AppendResults(results, realName, data, seenPairs)
-                            if #results > 100 then break end
+                            exactMatch = true
+                        end
+                    end
+
+                    -- 2. Prefix/Contains Scan (only if no exact match found yet or we want more)
+                    if not exactMatch or #results < 10 then
+                        for realName, data in pairs(bucket) do
+                            local normName = Normalize(realName)
+                            if normName:find(q, 1, true) and normName ~= q then
+                                self:AppendResults(results, realName, data, seenPairs)
+                                if #results > 100 then break end
+                            end
                         end
                     end
                 end
+                if #results > 100 then break end
             end
-            if #results > 100 then break end
         end
+        if #results > 100 then break end
     end
 
     if #results > 0 then
@@ -216,7 +234,7 @@ function NPCModelViewerAPI:Search(query)
     return nil
 end
 
-function NPCModelViewerAPI:AppendResults(results, name, data, seenPairs)
+function NPCDataViewerAPI:AppendResults(results, name, data, seenPairs)
     local sortedNpcIds = {}
     for npcId in pairs(data.ids) do
         table.insert(sortedNpcIds, npcId)
@@ -271,7 +289,7 @@ function NPCModelViewerAPI:AppendResults(results, name, data, seenPairs)
     end
 end
 
-function NPCModelViewerAPI:GetMetadataValue(data, field, npcId)
+function NPCDataViewerAPI:GetMetadataValue(data, field, npcId)
     if not data or not data[field] then return nil end
     for labelId, npcList in pairs(data[field]) do
         if type(npcList) == "table" then
@@ -289,15 +307,15 @@ end
 -- Legacy & ID Lookups
 -- =========================================================
 
-function NPCModelViewerAPI:GetNamesByNpcId(npcId)
+function NPCDataViewerAPI:GetNamesByNpcId(npcId)
     return self._idToNames[npcId]
 end
 
-function NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId)
+function NPCDataViewerAPI:GetDisplayIdsByNpcId(npcId)
     return self._npcIdToDisplayIds[npcId]
 end
 
-function NPCModelViewerAPI:GetNpcDataByName(name)
+function NPCDataViewerAPI:GetNpcDataByName(name)
     local res = self:Search(name)
     return res and res[1] -- Return first variant for legacy support
 end

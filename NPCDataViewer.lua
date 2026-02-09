@@ -1,7 +1,7 @@
 local ADDON_NAME = ...
 
-local function NPCMV_Print(...)
-    print("|cff00ff88NPC Model Viewer:|r", ...)
+local function NPCDV_Print(...)
+    print("|cff00ff88NPC Data Viewer:|r", ...)
 end
 
 -- =========================================================
@@ -61,348 +61,22 @@ local ModelViewer = {
 local DB_VERSION = 5
 local BATCH_ID_RANGE = 1000
 
-local function HarvestKey(npcId, displayId)
-    return tostring(npcId or 0) .. ":" .. tostring(displayId or 0)
-end
-
-local function GetBatchLabel(npcId)
-    local startRange = math.floor(npcId / BATCH_ID_RANGE) * BATCH_ID_RANGE
-    return ("Display IDs %d - %d"):format(startRange, startRange + BATCH_ID_RANGE - 1)
-end
-
-local function GetEntryLabel(name, npcId, displayId)
-    return ("%d - %s"):format(npcId, name or "Unknown")
-end
-
 local function EnsureHarvestDB()
-    if not NPCModelViewerDB or type(NPCModelViewerDB) ~= "table" then
-        NPCModelViewerDB = {}
+    if not NPCDataViewerDB or type(NPCDataViewerDB) ~= "table" then
+        NPCDataViewerDB = {}
     end
 
-    NPCModelViewerDB.meta = NPCModelViewerDB.meta or {}
-    local oldVersion = NPCModelViewerDB.meta.version or 1
-    NPCModelViewerDB.meta.version = DB_VERSION
-    NPCModelViewerDB.meta.importedCreatureDisplayDB = NPCModelViewerDB.meta.importedCreatureDisplayDB or false
+    NPCDataViewerDB.meta = NPCDataViewerDB.meta or {}
+    NPCDataViewerDB.meta.version = DB_VERSION
 
-    NPCModelViewerDB.knownIds = NPCModelViewerDB.knownIds or {}
-    NPCModelViewerDB.discoveredIds = NPCModelViewerDB.discoveredIds or {}
+    NPCDataViewerDB.displayIdBatches = NPCDataViewerDB.displayIdBatches or {}
+    NPCDataViewerDB.count = NPCDataViewerDB.count or 0
 
-    -- Migration to v5 (Rename batches to displayIdBatches, "Display IDs" labels)
-    if not NPCModelViewerDB.displayIdBatches or oldVersion < 5 then
-        local oldBatches = NPCModelViewerDB.batches or NPCModelViewerDB.displayIdBatches
-        NPCModelViewerDB.displayIdBatches = {}
-        NPCModelViewerDB.batches = nil
-        NPCModelViewerDB.count = 0
-        ModelViewer.lookup = {}
-
-        local function MigrateEntry(entry)
-            local name = entry.NPC_Name or entry.name or "Unknown"
-            local id = tonumber(entry.NPC_ID or entry.npcId)
-            local did = tonumber(entry.Display_ID or entry.displayId)
-            if id and did then
-                local bLabel = GetBatchLabel(id)
-                local eLabel = GetEntryLabel(name, id, did)
-                NPCModelViewerDB.displayIdBatches[bLabel] = NPCModelViewerDB.displayIdBatches[bLabel] or {}
-                if not NPCModelViewerDB.displayIdBatches[bLabel][eLabel] then
-                    NPCModelViewerDB.displayIdBatches[bLabel][eLabel] = {
-                        NPC_Name = name,
-                        NPC_ID = id,
-                        Display_ID = did
-                    }
-                    NPCModelViewerDB.count = NPCModelViewerDB.count + 1
-                    local key = HarvestKey(id, did)
-                    ModelViewer.lookup[key] = NPCModelViewerDB.displayIdBatches[bLabel][eLabel]
-
-                    NPCModelViewerDB.knownIds[id] = true
-                    NPCModelViewerDB.knownIds[did] = true
-                end
-            end
-        end
-
-        if oldBatches then
-            for _, batch in pairs(oldBatches) do
-                for _, entry in pairs(batch) do MigrateEntry(entry) end
-            end
-        end
-    end
-
-    -- Runtime lookup
-    if not ModelViewer.lookup then
-        ModelViewer.lookup = {}
-        for _, batch in pairs(NPCModelViewerDB.displayIdBatches) do
-            for _, entry in pairs(batch) do
-                local key = HarvestKey(entry.NPC_ID, entry.Display_ID)
-                ModelViewer.lookup[key] = entry
-            end
-        end
-    end
-
-    return NPCModelViewerDB
-end
-
-local function EscapeCsv(text)
-    text = tostring(text or "")
-    if text:find("[\"\n\r,]") then
-        text = text:gsub('"', '""')
-        return '"' .. text .. '"'
-    end
-    return text
-end
-
-local function AddHarvestEntry(npcName, npcId, displayId, sourceLabel)
-    npcId = tonumber(npcId)
-    displayId = tonumber(displayId)
-    if not npcId or npcId <= 0 or not displayId or displayId <= 0 then
-        return false
-    end
-
-    local db = EnsureHarvestDB()
-    local key = HarvestKey(npcId, displayId)
-    local entry = ModelViewer.lookup[key]
-    local isNew = not entry
-
-    if entry then
-        if npcName and npcName ~= "" then
-            entry.NPC_Name = npcName
-        end
-    else
-        local bLabel = GetBatchLabel(npcId)
-        local eLabel = GetEntryLabel(npcName, npcId, displayId)
-
-        db.displayIdBatches[bLabel] = db.displayIdBatches[bLabel] or {}
-        local newEntry = {
-            NPC_Name = npcName or "Unknown",
-            NPC_ID = npcId,
-            Display_ID = displayId
-        }
-        db.displayIdBatches[bLabel][eLabel] = newEntry
-        db.count = (db.count or 0) + 1
-        ModelViewer.lookup[key] = newEntry
-
-        db.knownIds[npcId] = true
-        db.knownIds[displayId] = true
-
-        if sourceLabel == "hover" or sourceLabel == "target" then
-            db.discoveredIds[npcId] = true
-            db.discoveredIds[displayId] = true
-            newEntry.isDiscovered = true
-            NPCMV_Print("|cffffff00New Discovery!|r", (npcName or "Unknown"), "(NPC:", npcId, "Display:", displayId, ")")
-        end
-
-        -- Invalidate navigation indices
-        ModelViewer._indicesBuilt = false
-    end
-
-    return true, isNew
-end
-
-local function ParseNpcIdFromGuid(guid)
-    if not guid then return nil end
-
-    local ok, npcId = pcall(function()
-        if guid == "" then return nil end
-
-        -- Creature-0-0000-0000-0000-<NPCID>-0000000000
-        -- Vehicle-0-0000-0000-0000-<NPCID>-0000000000
-        local unitType, _, _, _, _, id = strsplit("-", guid)
-        if unitType ~= "Creature" and unitType ~= "Vehicle" then
-            return nil
-        end
-
-        local numId = tonumber(id)
-        if not numId or numId <= 0 then
-            return nil
-        end
-        return numId
-    end)
-
-    return ok and npcId or nil
-end
-
-local function ImportFromCreatureDisplayDBIfNeeded()
-    local db = EnsureHarvestDB()
-    if db.meta.importedCreatureDisplayDB then
-        return
-    end
-    if not IsCreatureDisplayDBAvailable() then
-        return
-    end
-
-    local imported = 0
-    -- Iterate unique names in lib
-    for npcName, _ in pairs(CreatureDisplayDBdb.byname) do
-        local allNpcIds = CreatureDisplayDB:GetNpcIdsByName(npcName) or {}
-        local allDispIds = CreatureDisplayDB:GetDisplayIdsByName(npcName) or {}
-
-        -- Since AddHarvestEntry works with pairs, we ensure every NPC_ID
-        -- mentioned for this name is registered with at least the first DisplayID,
-        -- and every DisplayID is registered with the first NPC_ID.
-        local firstNpcId = allNpcIds[1]
-        local firstDispId = allDispIds[1]
-
-        if firstNpcId and firstDispId then
-            -- Cross-pollinate
-            for _, dId in ipairs(allDispIds) do
-                local ok, isNew = AddHarvestEntry(npcName, firstNpcId, dId, "CreatureDisplayDB")
-                if ok and isNew then imported = imported + 1 end
-            end
-            for _, nId in ipairs(allNpcIds) do
-                AddHarvestEntry(npcName, nId, firstDispId, "CreatureDisplayDB")
-            end
-        end
-    end
-
-    db.meta.importedCreatureDisplayDB = true
-    NPCMV_Print("Imported", imported, "entries from CreatureDisplayDB.")
-end
-
-local function ExportHarvestCsv()
-    local db = EnsureHarvestDB()
-    local lines = {}
-    lines[#lines + 1] = "NPC_Name,NPC_ID,Display_ID"
-
-    local entries = {}
-    for _, batch in pairs(db.displayIdBatches) do
-        for _, entry in pairs(batch) do
-            if entry.isDiscovered then
-                entries[#entries + 1] = entry
-            end
-        end
-    end
-
-    table.sort(entries, function(a, b)
-        local an = ToLowerSafe(a.NPC_Name)
-        local bn = ToLowerSafe(b.NPC_Name)
-        if an == bn then
-            if a.NPC_ID == b.NPC_ID then
-                return a.Display_ID < b.Display_ID
-            end
-            return a.NPC_ID < b.NPC_ID
-        end
-        return an < bn
-    end)
-
-    for _, entry in ipairs(entries) do
-        lines[#lines + 1] = table.concat(
-            { EscapeCsv(entry.NPC_Name), tostring(entry.NPC_ID), tostring(entry.Display_ID) }, ",")
-    end
-
-    return table.concat(lines, "\n")
+    return NPCDataViewerDB
 end
 
 -- =========================================================
--- Export Popup UI
--- =========================================================
-local ExportUI = {}
-
-function ExportUI:Ensure()
-    if self.frame then
-        return
-    end
-
-    local frame = CreateFrame("Frame", "NPCModelViewerExportFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(760, 560)
-    frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:Hide()
-
-    frame:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1
-    })
-    frame:SetBackdropColor(0, 0, 0, 0.90)
-    frame:SetBackdropBorderColor(1, 1, 1, 0.15)
-
-    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
-
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("NPC Model Viewer Export")
-
-    local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("TOP", title, "BOTTOM", 0, -6)
-    hint:SetText("Copy and paste into a file / website. Format: NPC_Name,NPC_ID,Display_ID")
-
-    local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 16, -54)
-    scroll:SetPoint("BOTTOMRIGHT", -34, 46)
-
-    local editBox = CreateFrame("EditBox", nil, scroll)
-    editBox:SetMultiLine(true)
-    editBox:SetFontObject(ChatFontNormal)
-    editBox:SetAutoFocus(false)
-    editBox:SetWidth(700)
-    editBox:SetText("")
-    editBox:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-    end)
-
-    scroll:SetScrollChild(editBox)
-
-    local copy = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    copy:SetSize(120, 24)
-    copy:SetPoint("BOTTOMLEFT", 16, 14)
-    copy:SetText("Copy")
-
-    local refresh = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    refresh:SetSize(120, 24)
-    refresh:SetPoint("LEFT", copy, "RIGHT", 10, 0)
-    refresh:SetText("Refresh")
-
-    local stats = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    stats:SetPoint("BOTTOMRIGHT", -18, 18)
-    stats:SetText("")
-
-    copy:SetScript("OnClick", function()
-        local text = editBox:GetText() or ""
-        if C_Clipboard and C_Clipboard.SetClipboard then
-            C_Clipboard.SetClipboard(text)
-            NPCMV_Print("Export copied to clipboard.")
-        else
-            editBox:SetFocus()
-            editBox:HighlightText()
-            NPCMV_Print("Clipboard API not available; text highlighted for manual copy.")
-        end
-    end)
-
-    refresh:SetScript("OnClick", function()
-        self:Show()
-    end)
-
-    self.frame = frame
-    self.editBox = editBox
-    self.stats = stats
-end
-
-function ExportUI:Show()
-    self:Ensure()
-    local csv = ExportHarvestCsv()
-    self.editBox:SetText(csv)
-    self.editBox:SetCursorPosition(0)
-    self.editBox:HighlightText()
-    self.editBox:SetFocus()
-
-    local db = EnsureHarvestDB()
-    self.stats:SetText("Entries: " .. tostring(db.count or 0))
-
-    self.frame:Show()
-end
-
-function ExportUI:Hide()
-    if self.frame then
-        self.frame:Hide()
-    end
-end
-
--- =========================================================
--- Model Viewer (UI + logic) - Definition moved up
+-- Model Viewer (UI + logic)
 -- =========================================================
 
 function ModelViewer:Ensure()
@@ -410,7 +84,7 @@ function ModelViewer:Ensure()
         return
     end
 
-    local frame = CreateFrame("Frame", "NPCModelViewerFrame", UIParent, "BackdropTemplate")
+    local frame = CreateFrame("Frame", "NPCDataViewerFrame", UIParent, "BackdropTemplate")
     frame:SetSize(680, 800)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
@@ -440,8 +114,21 @@ function ModelViewer:Ensure()
 
     local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("LEFT", 15, 0)
-    title:SetText("NPC MODEL VIEWER")
+    title:SetText("NPC DATA VIEWER")
     title:SetTextColor(0.8, 0.8, 0.8)
+
+    local settings = CreateFrame("Button", nil, header)
+    settings:SetSize(20, 20)
+    settings:SetPoint("RIGHT", -32, 0)
+    local stex = settings:CreateTexture(nil, "ARTWORK")
+    stex:SetAllPoints()
+    stex:SetAtlas("UI-HUD-ActionBar-IconSettings-Mouseover")
+    settings:SetNormalTexture(stex)
+    settings:SetScript("OnClick", function()
+        if NPCDataViewerOptions and NPCDataViewerOptions.Toggle then
+            NPCDataViewerOptions:Toggle()
+        end
+    end)
 
     local close = CreateFrame("Button", nil, header, "UIPanelCloseButton")
     close:SetPoint("RIGHT", -2, 0)
@@ -449,25 +136,51 @@ function ModelViewer:Ensure()
 
     -- Search bar and buttons container (centered)
     local searchGroup = CreateFrame("Frame", nil, frame)
-    searchGroup:SetSize(600, 40)
-    searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -10)
+    searchGroup:SetSize(600, 32)
+    searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -8)
 
     local input = CreateFrame("EditBox", nil, searchGroup, "InputBoxTemplate")
-    input:SetSize(380, 28)
+    input:SetSize(480, 28)
     input:SetPoint("LEFT", 10, 0)
     input:SetAutoFocus(false)
     input:SetText("")
     input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
-    local go = CreateFrame("Button", nil, searchGroup, "UIPanelButtonTemplate")
-    go:SetSize(90, 26)
-    go:SetPoint("LEFT", input, "RIGHT", 12, 0)
-    go:SetText("SEARCH")
+    -- Modern styled search button
+    local function CreateModernButton(parent, text, width)
+        local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+        btn:SetSize(width or 90, 28)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        btn:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
+        btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
-    local export = CreateFrame("Button", nil, searchGroup, "UIPanelButtonTemplate")
-    export:SetSize(90, 26)
-    export:SetPoint("LEFT", go, "RIGHT", 6, 0)
-    export:SetText("EXPORT")
+        local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("CENTER")
+        label:SetText(text)
+        label:SetTextColor(0.9, 0.9, 0.9)
+        btn.label = label
+
+        btn:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.25, 0.25, 0.25, 1)
+            self:SetBackdropBorderColor(0.8, 0.6, 0, 1)
+            self.label:SetTextColor(1, 0.82, 0)
+        end)
+
+        btn:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
+            self:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+            self.label:SetTextColor(0.9, 0.9, 0.9)
+        end)
+
+        return btn
+    end
+
+    local go = CreateModernButton(searchGroup, "SEARCH", 90)
+    go:SetPoint("LEFT", input, "RIGHT", 8, 0)
 
     -- Global Navigation (Outside)
     local function CreateAtlasButton(parent, atlas, xOff, flipX)
@@ -531,18 +244,208 @@ function ModelViewer:Ensure()
     end
 
     local modelContainer = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    modelContainer:SetSize(640, 460)
-    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, 0)
+    modelContainer:SetSize(640, 480)
+    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, -5)
     modelContainer:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
         edgeSize = 1
     })
-    modelContainer:SetBackdropColor(0, 0, 0, 0.3)
-    modelContainer:SetBackdropBorderColor(1, 1, 1, 0.05)
+    modelContainer:SetBackdropColor(0, 0, 0, 0.4)
+    modelContainer:SetBackdropBorderColor(1, 1, 1, 0.08)
 
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
+
+    -- Model interaction state
+    self.modelRotation = 0
+    self.modelPosition = { x = 0, y = 0, z = 0 }
+    self.modelDistance = 0 -- Default zoom level (0 = normal view)
+    self.isRotating = false
+    self.rotationSpeed = 0
+
+    -- Left-click drag to rotate
+    model:EnableMouse(true)
+    model:SetScript("OnMouseDown", function(self, button)
+        if button == "LeftButton" then
+            ModelViewer.isDragging = true
+            ModelViewer.dragStartX = GetCursorPosition()
+            ModelViewer.dragStartRotation = ModelViewer.modelRotation
+        elseif button == "RightButton" then
+            ModelViewer.isTranslating = true
+            ModelViewer.dragStartX, ModelViewer.dragStartY = GetCursorPosition()
+            ModelViewer.dragStartPos = { x = ModelViewer.modelPosition.x, y = ModelViewer.modelPosition.y }
+        end
+    end)
+
+    model:SetScript("OnMouseUp", function(self, button)
+        if button == "LeftButton" then
+            ModelViewer.isDragging = false
+        elseif button == "RightButton" then
+            ModelViewer.isTranslating = false
+        end
+    end)
+
+    model:SetScript("OnUpdate", function(self, elapsed)
+        -- Auto-rotation (no animations, just rotation)
+        local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
+        if settings and settings.autoRotate and not ModelViewer.isDragging and not ModelViewer.isTranslating then
+            ModelViewer.modelRotation = (ModelViewer.modelRotation + elapsed * 0.3) % (math.pi * 2)
+            self:SetRotation(ModelViewer.modelRotation)
+            -- Freeze the model to prevent animation playback
+            self:SetAnimation(0)
+        end
+
+        -- Manual rotation
+        if ModelViewer.isDragging then
+            local cursorX = GetCursorPosition()
+            local delta = (cursorX - ModelViewer.dragStartX) * 0.01
+            ModelViewer.modelRotation = (ModelViewer.dragStartRotation + delta) % (math.pi * 2)
+            self:SetRotation(ModelViewer.modelRotation)
+            self:SetAnimation(0) -- Freeze animation during manual rotation
+        end
+
+        -- Manual translation
+        if ModelViewer.isTranslating then
+            local cursorX, cursorY = GetCursorPosition()
+            local deltaX = (cursorX - ModelViewer.dragStartX) * 0.001
+            local deltaY = (cursorY - ModelViewer.dragStartY) * 0.001
+            ModelViewer.modelPosition.x = ModelViewer.dragStartPos.x + deltaX
+            ModelViewer.modelPosition.y = ModelViewer.dragStartPos.y + deltaY
+            self:SetPosition(ModelViewer.modelPosition.z, ModelViewer.modelPosition.x, ModelViewer.modelPosition.y)
+        end
+    end)
+
+    -- Mouse wheel zoom
+    model:EnableMouseWheel(true)
+    model:SetScript("OnMouseWheel", function(self, delta)
+        if delta > 0 then
+            -- Scroll up = zoom in (decrease distance)
+            ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.1)
+        else
+            -- Scroll down = zoom out (increase distance)
+            ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.1)
+        end
+        self:SetPortraitZoom(ModelViewer.modelDistance)
+    end)
+
+    -- Model control buttons
+    local controlBar = CreateFrame("Frame", nil, modelContainer)
+    controlBar:SetSize(200, 30)
+    controlBar:SetPoint("BOTTOM", 0, 8)
+
+    local function CreateControlButton(parent, atlas, tooltip, size)
+        local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+        btn:SetSize(size or 28, size or 28)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        btn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+        if atlas then
+            local tex = btn:CreateTexture(nil, "ARTWORK")
+            tex:SetPoint("CENTER")
+            tex:SetSize((size or 28) - 6, (size or 28) - 6)
+            tex:SetAtlas(atlas)
+            tex:SetVertexColor(0.7, 0.7, 0.7)
+            btn.tex = tex
+            btn.isAtlas = true
+        end
+
+        btn:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.2, 0.2, 0.2, 1)
+            self:SetBackdropBorderColor(0.8, 0.6, 0, 1)
+            if self.tex then
+                self.tex:SetVertexColor(1, 0.82, 0)
+            end
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(tooltip, 1, 1, 1)
+            GameTooltip:Show()
+        end)
+
+        btn:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+            self:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+            if self.tex then
+                self.tex:SetVertexColor(0.7, 0.7, 0.7)
+            end
+            GameTooltip:Hide()
+        end)
+
+        return btn
+    end
+
+    local rotateLeftBtn = CreateControlButton(controlBar, "shop-header-arrow-hover", "Rotate Left")
+    rotateLeftBtn:SetPoint("LEFT", 0, 0)
+    -- No flip needed - this is already the left arrow
+    rotateLeftBtn:SetScript("OnClick", function()
+        ModelViewer.modelRotation = (ModelViewer.modelRotation - 0.3) % (math.pi * 2)
+        model:SetRotation(ModelViewer.modelRotation)
+        model:SetAnimation(0) -- Freeze animation
+    end)
+
+    local rotateRightBtn = CreateControlButton(controlBar, "shop-header-arrow-hover", "Rotate Right")
+    rotateRightBtn:SetPoint("LEFT", rotateLeftBtn, "RIGHT", 4, 0)
+    if rotateRightBtn.tex then
+        rotateRightBtn.tex:SetTexCoord(1, 0, 0, 1) -- Flip horizontally for right arrow
+    end
+    rotateRightBtn:SetScript("OnClick", function()
+        ModelViewer.modelRotation = (ModelViewer.modelRotation + 0.3) % (math.pi * 2)
+        model:SetRotation(ModelViewer.modelRotation)
+        model:SetAnimation(0) -- Freeze animation
+    end)
+
+    local zoomInBtn = CreateControlButton(controlBar, "common-icon-zoomin-disable", "Zoom In")
+    zoomInBtn:SetPoint("LEFT", rotateRightBtn, "RIGHT", 8, 0)
+    zoomInBtn:SetScript("OnClick", function()
+        -- Zoom in = decrease distance
+        ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.2)
+        model:SetPortraitZoom(ModelViewer.modelDistance)
+    end)
+
+    local zoomOutBtn = CreateControlButton(controlBar, "common-icon-zoomout-disable", "Zoom Out")
+    zoomOutBtn:SetPoint("LEFT", zoomInBtn, "RIGHT", 4, 0)
+    zoomOutBtn:SetScript("OnClick", function()
+        -- Zoom out = increase distance
+        ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.2)
+        model:SetPortraitZoom(ModelViewer.modelDistance)
+    end)
+
+    local resetBtn = CreateControlButton(controlBar, "common-icon-undo-disable", "Reset View")
+    resetBtn:SetPoint("LEFT", zoomOutBtn, "RIGHT", 8, 0)
+    if resetBtn.tex then
+        resetBtn.tex:SetVertexColor(0.6, 0.6, 0.6) -- Gray color
+    end
+    resetBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.2, 1)
+        self:SetBackdropBorderColor(0.8, 0.6, 0, 1)
+        if self.tex then
+            self.tex:SetVertexColor(0.8, 0.8, 0.8) -- Lighter gray on hover
+        end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Reset View", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    resetBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+        self:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+        if self.tex then
+            self.tex:SetVertexColor(0.6, 0.6, 0.6) -- Back to gray
+        end
+        GameTooltip:Hide()
+    end)
+    resetBtn:SetScript("OnClick", function()
+        ModelViewer.modelRotation = 0
+        ModelViewer.modelPosition = { x = 0, y = 0, z = 0 }
+        ModelViewer.modelDistance = 0 -- Reset to default zoom level
+        model:SetRotation(0)
+        model:SetPosition(0, 0, 0)
+        model:SetPortraitZoom(0) -- 0 = default view
+        model:SetAnimation(0)    -- Freeze animation
+    end)
 
     -- No Model Warning
     local noModelWarning = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -554,8 +457,8 @@ function ModelViewer:Ensure()
 
     -- Subsection (Subcontext frame)
     local infoBox = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -10)
-    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 15)
+    infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -5)
+    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 10)
     infoBox:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
     })
@@ -653,11 +556,15 @@ function ModelViewer:Ensure()
     self.frame = frame
     self.input = input
     self.go = go
-    self.export = export
     self.model = model
     self.suggest = suggest
     self.suggestButtons = suggestButtons
     self.MAX_SUGGEST = MAX_SUGGEST
+end
+
+function ModelViewer:UpdateRotationState()
+    -- Called when auto-rotation setting changes
+    -- No action needed as the OnUpdate script checks settings dynamically
 end
 
 function ModelViewer:SyncState()
@@ -667,8 +574,8 @@ function ModelViewer:SyncState()
     local dispId = nameVariant and nameVariant.displayId or "-"
 
     local zone, ntype, family, classification, patch, tameable, encounter, instance
-    if nameVariant and NPCModelViewer_Indexes then
-        local idx = NPCModelViewer_Indexes
+    if nameVariant and NPCDataViewer_Indexes then
+        local idx = NPCDataViewer_Indexes
         zone = idx.zone[nameVariant.zone]
         ntype = idx.type[nameVariant.type]
         family = idx.family[nameVariant.family]
@@ -736,8 +643,8 @@ function ModelViewer:UpdateDispListForNpc(npcId)
     end
 
     -- 1) Master Data (Strict Correlation)
-    if NPCModelViewerAPI then
-        local apiDids = NPCModelViewerAPI:GetDisplayIdsByNpcId(npcId)
+    if NPCDataViewerAPI then
+        local apiDids = NPCDataViewerAPI:GetDisplayIdsByNpcId(npcId)
         if apiDids then
             for _, did in ipairs(apiDids) do AddId(did) end
         end
@@ -745,10 +652,12 @@ function ModelViewer:UpdateDispListForNpc(npcId)
 
     -- 2) Harvested (SavedVariables) - only if it matches this npcId
     local db = EnsureHarvestDB()
-    for _, batch in pairs(db.displayIdBatches) do
-        for _, entry in pairs(batch) do
-            if entry.NPC_ID == npcId then
-                AddId(entry.Display_ID)
+    if db.displayIdBatches then
+        for _, batch in pairs(db.displayIdBatches) do
+            for _, entry in pairs(batch) do
+                if entry.NPC_ID == npcId then
+                    AddId(entry.Display_ID)
+                end
             end
         end
     end
@@ -902,29 +811,19 @@ function ModelViewer:BuildGlobalIndicesIfNeeded()
         end
     end
 
-    -- 1) Lib
-    if IsCreatureDisplayDBAvailable() then
-        for name, _ in pairs(CreatureDisplayDBdb.byname) do
-            local ids = CreatureDisplayDB:GetNpcIdsByName(name)
-            if ids then
-                for _, id in ipairs(ids) do Collect(name, id) end
-            else
-                Collect(name, nil)
+    -- 2) Local
+    local db = EnsureHarvestDB()
+    if db.displayIdBatches then
+        for _, batch in pairs(db.displayIdBatches) do
+            for _, entry in pairs(batch) do
+                Collect(entry.NPC_Name, entry.NPC_ID)
             end
         end
     end
 
-    -- 2) Local
-    local db = EnsureHarvestDB()
-    for _, batch in pairs(db.displayIdBatches) do
-        for _, entry in pairs(batch) do
-            Collect(entry.NPC_Name, entry.NPC_ID)
-        end
-    end
-
     -- 3) Master Data
-    if NPCModelViewer_Data then
-        for _, bucket in pairs(NPCModelViewer_Data) do
+    if NPCDataViewer_Data then
+        for _, bucket in pairs(NPCDataViewer_Data) do
             for name, data in pairs(bucket) do
                 if data.ids then
                     for npcId, _ in pairs(data.ids) do
@@ -989,7 +888,7 @@ function ModelViewer:ShowSuggestions(matches)
 end
 
 function ModelViewer:ComputeSuggestions(typed)
-    local results = NPCModelViewerAPI:Search(typed)
+    local results = NPCDataViewerAPI:Search(typed)
     if not results then return {} end
 
     local matches = {}
@@ -1050,7 +949,7 @@ function ModelViewer:TryIdSequence(labelPrefix, idList, applyFn, onDone)
         end
         resolved = true
         if ok then
-            NPCMV_Print("SUCCESS via:", labelPrefix, "ID:", chosenId)
+            NPCDV_Print("SUCCESS via:", labelPrefix, "ID:", chosenId)
         end
         onDone(ok, chosenId)
     end
@@ -1115,7 +1014,7 @@ function ModelViewer:ApplyInput()
     local raw = Trim(self.input:GetText())
     if raw == "" then return end
 
-    local results = NPCModelViewerAPI:Search(raw)
+    local results = NPCDataViewerAPI:Search(raw)
     if results then
         self._curResults = results
         self._curResultIdx = 1
@@ -1137,40 +1036,32 @@ end
 function ModelViewer:ApplyNumeric(numberValue)
     local foundName = nil
 
-    -- 1) Master Data (NPCModelViewerAPI)
-    if NPCModelViewerAPI then
-        local names = NPCModelViewerAPI:GetNamesByNpcId(numberValue)
+    -- 1) Master Data (NPCDataViewerAPI)
+    if NPCDataViewerAPI then
+        local names = NPCDataViewerAPI:GetNamesByNpcId(numberValue)
         if names and names[1] then
             foundName = names[1]
-        end
-    end
-
-    -- 2) Lib
-    if not foundName and IsCreatureDisplayDBAvailable() then
-        local data = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
-        if data and data.name then foundName = data.name end
-        if not foundName then
-            local data2 = CreatureDisplayDB:GetCreatureDisplayDataByDisplayId(numberValue)
-            if data2 and data2.name then foundName = data2.name end
         end
     end
 
     -- 3) Local (SavedVariables)
     if not foundName then
         local db = EnsureHarvestDB()
-        for _, batch in pairs(db.displayIdBatches) do
-            for _, entry in pairs(batch) do
-                if entry.NPC_ID == numberValue or entry.Display_ID == numberValue then
-                    foundName = entry.NPC_Name
-                    break
+        if db.displayIdBatches then
+            for _, batch in pairs(db.displayIdBatches) do
+                for _, entry in pairs(batch) do
+                    if entry.NPC_ID == numberValue or entry.Display_ID == numberValue then
+                        foundName = entry.NPC_Name
+                        break
+                    end
                 end
+                if foundName then break end
             end
-            if foundName then break end
         end
     end
 
     if foundName and foundName ~= "" and foundName ~= "-" then
-        local results = NPCModelViewerAPI:Search(foundName)
+        local results = NPCDataViewerAPI:Search(foundName)
         if results then
             self._curResults = results
             -- Try to find the variant that matches the numberValue (either NPCID or DisplayID)
@@ -1193,21 +1084,18 @@ function ModelViewer:ApplyNumeric(numberValue)
     self._curDispIds = {}
     self._curDispIdx = 0
 
-    local isNpcId = false
-    if IsCreatureDisplayDBAvailable() then
-        local d = CreatureDisplayDB:GetCreatureDisplayDataByNpcId(numberValue)
-        if d then isNpcId = true end
-    end
     if not isNpcId then
         local db = EnsureHarvestDB()
-        for _, b in pairs(db.displayIdBatches) do
-            for _, e in pairs(b) do
-                if e.NPC_ID == numberValue then
-                    isNpcId = true
-                    break
+        if db.displayIdBatches then
+            for _, b in pairs(db.displayIdBatches) do
+                for _, e in pairs(b) do
+                    if e.NPC_ID == numberValue then
+                        isNpcId = true
+                        break
+                    end
                 end
+                if isNpcId then break end
             end
-            if isNpcId then break end
         end
     end
 
@@ -1224,7 +1112,7 @@ function ModelViewer:ApplyNumeric(numberValue)
 end
 
 function ModelViewer:ApplyName(npcName)
-    local results = NPCModelViewerAPI:Search(npcName)
+    local results = NPCDataViewerAPI:Search(npcName)
     if results then
         self._curResults = results
         self._curResultIdx = 1
@@ -1277,10 +1165,6 @@ function ModelViewer:BindEvents()
         self:ApplyInput()
     end)
 
-    self.export:SetScript("OnClick", function()
-        ExportUI:Show()
-    end)
-
     self.input:SetScript("OnEnterPressed", function()
         self:ApplyInput()
     end)
@@ -1309,7 +1193,6 @@ SlashCmdList.NPCVIEWER = function(message)
 
     message = Trim(message)
     if message == "export" then
-        ExportUI:Show()
         return
     end
 
@@ -1323,60 +1206,7 @@ SlashCmdList.NPCVIEWER = function(message)
     ModelViewer:BuildNameIndexIfNeeded()
 end
 
--- =========================================================
--- Harvest from hovered NPCs
--- =========================================================
-local hoverHarvestHooked = false
-
-function HookHarvestUnit(unit, source)
-    if not unit then return end
-
-    local okE, exists = pcall(UnitExists, unit)
-    if not okE or not exists then return end
-
-    local okP, isPlayer = pcall(UnitIsPlayer, unit)
-    if okP and isPlayer then return end
-
-    local okN, name = pcall(UnitName, unit)
-    local okG, guid = pcall(UnitGUID, unit)
-    local okD, displayId = pcall(function()
-        return UnitCreatureDisplayID and UnitCreatureDisplayID(unit) or nil
-    end)
-
-    if not okN or not okG or not okD or not guid or not displayId or displayId <= 0 then
-        return
-    end
-
-    local npcId = ParseNpcIdFromGuid(guid)
-    if not npcId then return end
-
-    AddHarvestEntry(name, npcId, displayId, source)
-
-    if ModelViewer.frame and ModelViewer.frame:IsShown() then
-        ModelViewer:LoadSpecific(npcId, displayId, name)
-    end
-end
-
-local function HookHoverHarvestIfNeeded()
-    if hoverHarvestHooked then return end
-    hoverHarvestHooked = true
-
-    -- 1. Modern Tooltip API
-    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall then
-        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
-            if tooltip == GameTooltip then
-                HookHarvestUnit("mouseover", "hover")
-            end
-        end)
-        -- 2. Legacy Tooltip API
-    elseif GameTooltip and GameTooltip.HookScript then
-        pcall(function()
-            GameTooltip:HookScript("OnTooltipSetUnit", function()
-                HookHarvestUnit("mouseover", "hover")
-            end)
-        end)
-    end
-end
+-- Harvesting logic removed.
 
 -- =========================================================
 -- Addon init
@@ -1384,22 +1214,10 @@ end
 local InitFrame = CreateFrame("Frame")
 InitFrame:RegisterEvent("ADDON_LOADED")
 InitFrame:RegisterEvent("PLAYER_LOGIN")
-InitFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
-InitFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-InitFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 
 InitFrame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
         EnsureHarvestDB()
-        NPCModelViewerAPI:Initialize()
-        ImportFromCreatureDisplayDBIfNeeded()
-    elseif event == "PLAYER_LOGIN" then
-        HookHoverHarvestIfNeeded()
-    elseif event == "PLAYER_TARGET_CHANGED" then
-        HookHarvestUnit("target", "target")
-    elseif event == "UPDATE_MOUSEOVER_UNIT" then
-        HookHarvestUnit("mouseover", "hover")
-    elseif event == "NAME_PLATE_UNIT_ADDED" then
-        HookHarvestUnit(arg1, "nameplate")
+        NPCDataViewerAPI:Initialize()
     end
 end)
