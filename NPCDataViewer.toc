@@ -1,6 +1,6 @@
-## Interface: 110207, 120000, 120001
+## Interface: 120001
 ## Title: NPC Data Viewer
-## Notes: Display a 3D model by DisplayInfo ID via slash command
+## Notes: Provides all known details for a searched NPC.
 ## Author: Aceman
 ## Version: 1.2
 ## SavedVariables: NPCDataViewerDB

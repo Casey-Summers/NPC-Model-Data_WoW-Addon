@@ -5,6 +5,16 @@ local function NPCDV_Print(...)
 end
 
 -- =========================================================
+-- UI CONFIGURATION CONSTANTS (Adjust these for size)
+-- =========================================================
+local UI_WIDTH = 640
+local UI_VIEWPORT_HEIGHT = 500 -- Taller for large NPCs
+local UI_INFO_HEIGHT = 160
+local UI_SEARCH_HEIGHT = 34
+local UI_HEADER_HEIGHT = 34
+local UI_PADDING = 8 -- Spacing between elements
+
+-- =========================================================
 -- Small utils
 -- =========================================================
 local function Trim(text)
@@ -85,7 +95,8 @@ function ModelViewer:Ensure()
     end
 
     local frame = CreateFrame("Frame", "NPCDataViewerFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(680, 800)
+    local totalHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 4)
+    frame:SetSize(UI_WIDTH, totalHeight)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -112,12 +123,13 @@ function ModelViewer:Ensure()
     })
     header:SetBackdropColor(1, 1, 1, 0.05)
 
-    local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("LEFT", 15, 0)
+    local title = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
+    title:SetPoint("CENTER", 0, 0)
     title:SetText("NPC DATA VIEWER")
-    title:SetTextColor(0.8, 0.8, 0.8)
+    title:SetFont("Fonts\\FRIZQT__.TTF", 16, "OUTLINE") -- Larger and styled
+    title:SetTextColor(1, 1, 1)
 
-    -- Custom close button with Atlas texture
+    -- Custom close button with Atlas texture (Pure Gray)
     local close = CreateFrame("Button", nil, header)
     close:SetSize(20, 20)
     close:SetPoint("RIGHT", -8, 0)
@@ -125,15 +137,16 @@ function ModelViewer:Ensure()
     local closeTex = close:CreateTexture(nil, "ARTWORK")
     closeTex:SetAllPoints()
     closeTex:SetAtlas("common-icon-redx")
-    closeTex:SetVertexColor(0.8, 0.8, 0.8)
+    closeTex:SetDesaturation(1)            -- Force grayscale
+    closeTex:SetVertexColor(0.7, 0.7, 0.7) -- Gray color
     close:SetNormalTexture(closeTex)
 
     close:SetScript("OnEnter", function(self)
-        closeTex:SetVertexColor(1, 0.2, 0.2)
+        closeTex:SetVertexColor(1, 1, 1) -- Highlight on hover
     end)
 
     close:SetScript("OnLeave", function(self)
-        closeTex:SetVertexColor(0.8, 0.8, 0.8)
+        closeTex:SetVertexColor(0.7, 0.7, 0.7)
     end)
 
     close:SetScript("OnClick", function()
@@ -142,15 +155,32 @@ function ModelViewer:Ensure()
 
     -- Search bar and buttons container (centered)
     local searchGroup = CreateFrame("Frame", nil, frame)
-    searchGroup:SetSize(600, 32)
-    searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -8)
+    searchGroup:SetSize(UI_WIDTH - 20, UI_SEARCH_HEIGHT)
+    searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -UI_PADDING)
 
-    local input = CreateFrame("EditBox", nil, searchGroup, "InputBoxTemplate")
-    input:SetSize(480, 28)
-    input:SetPoint("LEFT", 10, 0)
+    -- Custom Search Bar (EditBox)
+    local inputContainer = CreateFrame("Frame", nil, searchGroup, "BackdropTemplate")
+    inputContainer:SetHeight(UI_SEARCH_HEIGHT)
+    inputContainer:SetPoint("LEFT", 0, 0)
+    inputContainer:SetPoint("RIGHT", -100, 0)
+    inputContainer:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    inputContainer:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+    inputContainer:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+
+    local input = CreateFrame("EditBox", nil, inputContainer)
+    input:SetAllPoints(inputContainer)
+    input:SetTextInsets(10, 10, 0, 0)
+    input:SetFont("Fonts\\FRIZQT__.TTF", 14, "")
+    input:SetTextColor(1, 1, 1)
     input:SetAutoFocus(false)
     input:SetText("")
     input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    inputContainer:SetScript("OnMouseDown", function() input:SetFocus() end)
 
     -- Modern styled search button
     local function CreateModernButton(parent, text, width)
@@ -186,12 +216,13 @@ function ModelViewer:Ensure()
     end
 
     local go = CreateModernButton(searchGroup, "SEARCH", 90)
-    go:SetPoint("LEFT", input, "RIGHT", 8, 0)
+    go:SetPoint("LEFT", inputContainer, "RIGHT", 8, 0)
+    go:SetHeight(UI_SEARCH_HEIGHT)
 
-    -- Global Navigation (Outside)
+    -- Global Navigation (Now inside the model container)
     local function CreateAtlasButton(parent, atlas, xOff, flipX)
         local btn = CreateFrame("Button", nil, parent)
-        btn:SetSize(32, 32)
+        btn:SetSize(40, 40) -- Slightly larger for visibility
         local tex = btn:CreateTexture(nil, "ARTWORK")
         tex:SetAllPoints()
         tex:SetAtlas(atlas)
@@ -206,14 +237,6 @@ function ModelViewer:Ensure()
         if flipX then high:SetTexCoord(1, 0, 0, 1) end
         return btn
     end
-
-    local gPrev = CreateAtlasButton(frame, "shop-header-arrow-disabled", -8, false)
-    gPrev:SetPoint("RIGHT", frame, "LEFT", -8, 0)
-    gPrev:SetScript("OnClick", function() self:PrevGlobal() end)
-
-    local gNext = CreateAtlasButton(frame, "shop-header-arrow-disabled", 8, true)
-    gNext:SetPoint("LEFT", frame, "RIGHT", 8, 0)
-    gNext:SetScript("OnClick", function() self:NextGlobal() end)
 
     -- Suggestions dropdown
     local suggest = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -250,8 +273,8 @@ function ModelViewer:Ensure()
     end
 
     local modelContainer = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    modelContainer:SetSize(640, 480)
-    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, -5)
+    modelContainer:SetSize(UI_WIDTH - 2, UI_VIEWPORT_HEIGHT)
+    modelContainer:SetPoint("TOP", searchGroup, "BOTTOM", 0, -UI_PADDING)
     modelContainer:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -262,6 +285,17 @@ function ModelViewer:Ensure()
 
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
+
+    -- Global Nav internal to model area (On TOP)
+    local gPrev = CreateAtlasButton(modelContainer, "shop-header-arrow-disabled", 0, false)
+    gPrev:SetPoint("LEFT", 12, 0)
+    gPrev:SetFrameLevel(model:GetFrameLevel() + 5)
+    gPrev:SetScript("OnClick", function() self:PrevGlobal() end)
+
+    local gNext = CreateAtlasButton(modelContainer, "shop-header-arrow-disabled", 0, true)
+    gNext:SetPoint("RIGHT", -12, 0)
+    gNext:SetFrameLevel(model:GetFrameLevel() + 5)
+    gNext:SetScript("OnClick", function() self:NextGlobal() end)
 
     -- Model interaction state
     self.modelRotation = 0
@@ -293,13 +327,11 @@ function ModelViewer:Ensure()
     end)
 
     model:SetScript("OnUpdate", function(self, elapsed)
-        -- Auto-rotation (no animations, just rotation)
+        -- Auto-rotation (Using SetFacing for smoother native rotation)
         local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
         if settings and settings.autoRotate and not ModelViewer.isDragging and not ModelViewer.isTranslating then
             ModelViewer.modelRotation = (ModelViewer.modelRotation + elapsed * 0.3) % (math.pi * 2)
-            self:SetRotation(ModelViewer.modelRotation)
-            -- Freeze the model to prevent animation playback
-            self:SetAnimation(0)
+            self:SetFacing(ModelViewer.modelRotation)
         end
 
         -- Manual rotation
@@ -307,8 +339,7 @@ function ModelViewer:Ensure()
             local cursorX = GetCursorPosition()
             local delta = (cursorX - ModelViewer.dragStartX) * 0.01
             ModelViewer.modelRotation = (ModelViewer.dragStartRotation + delta) % (math.pi * 2)
-            self:SetRotation(ModelViewer.modelRotation)
-            self:SetAnimation(0) -- Freeze animation during manual rotation
+            self:SetFacing(ModelViewer.modelRotation)
         end
 
         -- Manual translation
@@ -335,10 +366,10 @@ function ModelViewer:Ensure()
         self:SetPortraitZoom(ModelViewer.modelDistance)
     end)
 
-    -- Model control buttons
+    -- Model control buttons grouped and centered
     local controlBar = CreateFrame("Frame", nil, modelContainer)
-    controlBar:SetSize(200, 30)
-    controlBar:SetPoint("BOTTOM", 0, 8)
+    controlBar:SetSize(160, 30)
+    controlBar:SetPoint("BOTTOM", 0, 12)
 
     local function CreateControlButton(parent, atlas, tooltip, size)
         local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
@@ -389,8 +420,7 @@ function ModelViewer:Ensure()
     -- No flip needed - this is already the left arrow
     rotateLeftBtn:SetScript("OnClick", function()
         ModelViewer.modelRotation = (ModelViewer.modelRotation - 0.3) % (math.pi * 2)
-        model:SetRotation(ModelViewer.modelRotation)
-        model:SetAnimation(0) -- Freeze animation
+        model:SetFacing(ModelViewer.modelRotation)
     end)
 
     local rotateRightBtn = CreateControlButton(controlBar, "shop-header-arrow-hover", "Rotate Right")
@@ -400,12 +430,11 @@ function ModelViewer:Ensure()
     end
     rotateRightBtn:SetScript("OnClick", function()
         ModelViewer.modelRotation = (ModelViewer.modelRotation + 0.3) % (math.pi * 2)
-        model:SetRotation(ModelViewer.modelRotation)
-        model:SetAnimation(0) -- Freeze animation
+        model:SetFacing(ModelViewer.modelRotation)
     end)
 
     local zoomInBtn = CreateControlButton(controlBar, "common-icon-zoomin-disable", "Zoom In")
-    zoomInBtn:SetPoint("LEFT", rotateRightBtn, "RIGHT", 8, 0)
+    zoomInBtn:SetPoint("LEFT", rotateRightBtn, "RIGHT", 12, 0)
     zoomInBtn:SetScript("OnClick", function()
         -- Zoom in = increase distance for closer view
         ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.2)
@@ -421,7 +450,7 @@ function ModelViewer:Ensure()
     end)
 
     local resetBtn = CreateControlButton(controlBar, "common-icon-undo-disable", "Reset View")
-    resetBtn:SetPoint("LEFT", zoomOutBtn, "RIGHT", 8, 0)
+    resetBtn:SetPoint("LEFT", zoomOutBtn, "RIGHT", 12, 0)
     if resetBtn.tex then
         resetBtn.tex:SetVertexColor(0.6, 0.6, 0.6) -- Gray color
     end
@@ -447,10 +476,9 @@ function ModelViewer:Ensure()
         ModelViewer.modelRotation = 0
         ModelViewer.modelPosition = { x = 0, y = 0, z = 0 }
         ModelViewer.modelDistance = 0 -- Reset to default zoom level
-        model:SetRotation(0)
+        model:SetFacing(0)
         model:SetPosition(0, 0, 0)
         model:SetPortraitZoom(0) -- 0 = default view
-        model:SetAnimation(0)    -- Freeze animation
     end)
 
     -- No Model Warning
@@ -463,8 +491,9 @@ function ModelViewer:Ensure()
 
     -- Subsection (Subcontext frame)
     local infoBox = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -5)
-    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 10)
+    infoBox:SetPoint("TOPLEFT", modelContainer, "BOTTOMLEFT", 0, -UI_PADDING)
+    infoBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 1)
+    infoBox:SetHeight(UI_INFO_HEIGHT)
     infoBox:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
     })
@@ -473,6 +502,10 @@ function ModelViewer:Ensure()
     -- 1. Name and Extra Info
     local nameLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     nameLabel:SetPoint("TOP", infoBox, "TOP", 0, -12)
+    nameLabel:SetFont("Fonts\\FRIZQT__.TTF", 20, "OUTLINE") -- Larger Name
+    nameLabel:SetWidth(450)                                 -- Max width crop
+    nameLabel:SetMaxLines(1)
+    nameLabel:SetWordWrap(false)
     nameLabel:SetText("-")
     self.nameLabel = nameLabel
 
@@ -483,8 +516,8 @@ function ModelViewer:Ensure()
 
     -- 2. Left Column (Biometrics)
     local leftCol = CreateFrame("Frame", nil, infoBox)
-    leftCol:SetSize(200, 160)
-    leftCol:SetPoint("TOPLEFT", 10, -50)
+    leftCol:SetSize(200, 100)
+    leftCol:SetPoint("TOPLEFT", 10, -55)
 
     local function CreateSpecLabel(parent, labelText, yOff)
         local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -502,8 +535,8 @@ function ModelViewer:Ensure()
 
     -- 3. Right Column (World/Source)
     local rightCol = CreateFrame("Frame", nil, infoBox)
-    rightCol:SetSize(200, 160)
-    rightCol:SetPoint("TOPRIGHT", -10, -50)
+    rightCol:SetSize(200, 100)
+    rightCol:SetPoint("TOPRIGHT", -10, -55)
 
     self.locLabel = CreateSpecLabel(rightCol, "Location", 0)
     self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40)
@@ -513,8 +546,8 @@ function ModelViewer:Ensure()
 
     -- 4. ID Navigation Area (Center)
     local navGroup = CreateFrame("Frame", nil, infoBox)
-    navGroup:SetSize(240, 160)
-    navGroup:SetPoint("TOP", infoBox, "TOP", 0, -50)
+    navGroup:SetSize(240, 100)
+    navGroup:SetPoint("TOP", infoBox, "TOP", 0, -55)
 
     local function CreateNavControl(parent, labelText, yOff, onPrev, onNext)
         local cont = CreateFrame("Frame", nil, parent)
@@ -554,7 +587,7 @@ function ModelViewer:Ensure()
         function() self:PrevDisp() end, function() self:NextDisp() end)
 
     self.warningLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    self.warningLabel:SetPoint("BOTTOM", 0, 10)
+    self.warningLabel:SetPoint("BOTTOM", infoBox, "BOTTOM", 0, 4)
     self.warningLabel:SetTextColor(1, 0.2, 0.2)
     self.warningLabel:SetText("")
 
@@ -566,6 +599,22 @@ function ModelViewer:Ensure()
     self.suggest = suggest
     self.suggestButtons = suggestButtons
     self.MAX_SUGGEST = MAX_SUGGEST
+end
+
+function ModelViewer:UpdateGlobalIndexFromCurrent()
+    local nameVariant = self._curResults and self._curResults[self._curResultIdx]
+    if not nameVariant or not nameVariant.npcId then return end
+
+    self:BuildGlobalIdIndexIfNeeded()
+    if not self._idIndex then return end
+
+    -- Find the index of the current NPC ID in the global index
+    for i, id in ipairs(self._idIndex) do
+        if id == nameVariant.npcId then
+            self._curGlobalIdx = i
+            break
+        end
+    end
 end
 
 function ModelViewer:UpdateRotationState()
@@ -622,11 +671,15 @@ function ModelViewer:SyncState()
 
     if not showNoModel and type(dispId) == "number" and dispId ~= self._lastDisplayedId then
         self.model:SetDisplayInfo(dispId)
+        self.model:SetAnimation(0) -- Freeze
         self._lastDisplayedId = dispId
     elseif showNoModel or dispId == "-" or dispId == "NoData" then
         self.model:ClearModel()
         self._lastDisplayedId = nil
     end
+
+    -- Update global selection index based on current NPC ID
+    self:UpdateGlobalIndexFromCurrent()
 end
 
 function ModelViewer:UpdateDispListForNpc(npcId)
@@ -681,6 +734,21 @@ end
 function ModelViewer:NextGlobal()
     self:BuildGlobalIdIndexIfNeeded()
     if not self._idIndex or #self._idIndex == 0 then return end
+
+    -- Check if we are currently viewing an NPC not in the index
+    local nameVariant = self._curResults and self._curResults[self._curResultIdx]
+    local currentId = nameVariant and nameVariant.npcId
+
+    if currentId then
+        -- Find where we are relative to the index
+        for i, id in ipairs(self._idIndex) do
+            if id >= currentId then
+                self._curGlobalIdx = i
+                break
+            end
+        end
+    end
+
     self._curGlobalIdx = (self._curGlobalIdx % #self._idIndex) + 1
     local npcId = self._idIndex[self._curGlobalIdx]
     self.input:SetText(tostring(npcId))
@@ -690,6 +758,19 @@ end
 function ModelViewer:PrevGlobal()
     self:BuildGlobalIdIndexIfNeeded()
     if not self._idIndex or #self._idIndex == 0 then return end
+
+    local nameVariant = self._curResults and self._curResults[self._curResultIdx]
+    local currentId = nameVariant and nameVariant.npcId
+
+    if currentId then
+        for i = #self._idIndex, 1, -1 do
+            if self._idIndex[i] <= currentId then
+                self._curGlobalIdx = i
+                break
+            end
+        end
+    end
+
     self._curGlobalIdx = self._curGlobalIdx - 1
     if self._curGlobalIdx < 1 then self._curGlobalIdx = #self._idIndex end
     local npcId = self._idIndex[self._curGlobalIdx]
