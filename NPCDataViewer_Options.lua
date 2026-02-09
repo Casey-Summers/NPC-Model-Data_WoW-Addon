@@ -17,67 +17,23 @@ function NPCDataViewerOptions:GetSettings()
     return NPCDataViewerDB.settings
 end
 
-function NPCDataViewerOptions:Toggle()
-    if not self.frame then
-        self:CreateUI()
-    end
-    if self.frame:IsShown() then
-        self.frame:Hide()
-    else
-        self.frame:Show()
-    end
-end
-
 function NPCDataViewerOptions:CreateUI()
     local settings = self:GetSettings()
 
-    local frame = CreateFrame("Frame", "NPCDataViewerOptionsFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(450, 250)
-    frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
-    frame:EnableMouse(true)
-    frame:SetMovable(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:Hide()
+    -- Create a simple frame for WoW's interface options (not draggable, not a popup)
+    local frame = CreateFrame("Frame", "NPCDataViewerOptionsFrame")
+    frame.name = "NPC Data Viewer"
 
-    frame:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1
-    })
-    frame:SetBackdropColor(0.02, 0.02, 0.02, 0.98)
-    frame:SetBackdropBorderColor(1, 1, 1, 0.1)
-
-    -- Header
-    local header = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    header:SetPoint("TOPLEFT", 1, -1)
-    header:SetPoint("TOPRIGHT", -1, -1)
-    header:SetHeight(34)
-    header:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-    })
-    header:SetBackdropColor(1, 1, 1, 0.05)
-
-    local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("CENTER", 0, 0)
-    title:SetText("NPC DATA VIEWER SETTINGS")
-    title:SetTextColor(0.8, 0.8, 0.8)
-
-    local close = CreateFrame("Button", nil, header, "UIPanelCloseButton")
-    close:SetPoint("RIGHT", -2, 0)
-    close:SetScale(0.8)
+    -- Title
+    local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("NPC Data Viewer Settings")
 
     -- Auto-rotate checkbox
-    local autoRotateCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-    autoRotateCheck:SetPoint("TOPLEFT", 30, -60)
-    autoRotateCheck:SetSize(24, 24)
+    local autoRotateCheck = CreateFrame("CheckButton", nil, frame, "InterfaceOptionsCheckButtonTemplate")
+    autoRotateCheck:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -16)
+    autoRotateCheck.Text:SetText("Auto-rotate 3D models")
     autoRotateCheck:SetChecked(settings.autoRotate)
-
-    local autoRotateLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    autoRotateLabel:SetPoint("LEFT", autoRotateCheck, "RIGHT", 5, 0)
-    autoRotateLabel:SetText("Auto-rotate 3D models")
 
     autoRotateCheck:SetScript("OnClick", function(self)
         settings.autoRotate = self:GetChecked()
@@ -87,25 +43,22 @@ function NPCDataViewerOptions:CreateUI()
         end
     end)
 
-    local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hint:SetPoint("TOPLEFT", autoRotateCheck, "BOTTOMLEFT", 30, -10)
-    hint:SetPoint("RIGHT", -30, 0)
+    -- Hint text
+    local hint = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    hint:SetPoint("TOPLEFT", autoRotateCheck, "BOTTOMLEFT", 24, -8)
+    hint:SetPoint("RIGHT", -32, 0)
     hint:SetJustifyH("LEFT")
     hint:SetTextColor(0.6, 0.6, 0.6)
     hint:SetText(
-        "Tip: Left-click and drag to rotate models manually.\nRight-click and drag to reposition.\nMouse wheel to zoom in/out.")
+    "Tip: Left-click and drag to rotate models manually.\nRight-click and drag to reposition.\nMouse wheel to zoom in/out.")
 
     self.frame = frame
+    return frame
 end
 
 -- Initialize and register with WoW's interface options on load
 local function InitializeOptions()
-    NPCDataViewerOptions:CreateUI()
-    local frame = NPCDataViewerOptions.frame
-
-    frame.name = "NPC Data Viewer"
-    frame.okay = function() frame:Hide() end
-    frame.cancel = function() frame:Hide() end
+    local frame = NPCDataViewerOptions:CreateUI()
 
     -- Try modern API first (Dragonflight+)
     if Settings and Settings.RegisterCanvasLayoutCategory then

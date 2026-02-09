@@ -117,22 +117,28 @@ function ModelViewer:Ensure()
     title:SetText("NPC DATA VIEWER")
     title:SetTextColor(0.8, 0.8, 0.8)
 
-    local settings = CreateFrame("Button", nil, header)
-    settings:SetSize(20, 20)
-    settings:SetPoint("RIGHT", -32, 0)
-    local stex = settings:CreateTexture(nil, "ARTWORK")
-    stex:SetAllPoints()
-    stex:SetAtlas("UI-HUD-ActionBar-IconSettings-Mouseover")
-    settings:SetNormalTexture(stex)
-    settings:SetScript("OnClick", function()
-        if NPCDataViewerOptions and NPCDataViewerOptions.Toggle then
-            NPCDataViewerOptions:Toggle()
-        end
+    -- Custom close button with Atlas texture
+    local close = CreateFrame("Button", nil, header)
+    close:SetSize(20, 20)
+    close:SetPoint("RIGHT", -8, 0)
+
+    local closeTex = close:CreateTexture(nil, "ARTWORK")
+    closeTex:SetAllPoints()
+    closeTex:SetAtlas("common-icon-redx")
+    closeTex:SetVertexColor(0.8, 0.8, 0.8)
+    close:SetNormalTexture(closeTex)
+
+    close:SetScript("OnEnter", function(self)
+        closeTex:SetVertexColor(1, 0.2, 0.2)
     end)
 
-    local close = CreateFrame("Button", nil, header, "UIPanelCloseButton")
-    close:SetPoint("RIGHT", -2, 0)
-    close:SetScale(0.8)
+    close:SetScript("OnLeave", function(self)
+        closeTex:SetVertexColor(0.8, 0.8, 0.8)
+    end)
+
+    close:SetScript("OnClick", function()
+        frame:Hide()
+    end)
 
     -- Search bar and buttons container (centered)
     local searchGroup = CreateFrame("Frame", nil, frame)
@@ -320,11 +326,11 @@ function ModelViewer:Ensure()
     model:EnableMouseWheel(true)
     model:SetScript("OnMouseWheel", function(self, delta)
         if delta > 0 then
-            -- Scroll up = zoom in (decrease distance)
-            ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.1)
-        else
-            -- Scroll down = zoom out (increase distance)
+            -- Scroll up = zoom in (increase distance for closer view)
             ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.1)
+        else
+            -- Scroll down = zoom out (decrease distance for farther view)
+            ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.1)
         end
         self:SetPortraitZoom(ModelViewer.modelDistance)
     end)
@@ -401,16 +407,16 @@ function ModelViewer:Ensure()
     local zoomInBtn = CreateControlButton(controlBar, "common-icon-zoomin-disable", "Zoom In")
     zoomInBtn:SetPoint("LEFT", rotateRightBtn, "RIGHT", 8, 0)
     zoomInBtn:SetScript("OnClick", function()
-        -- Zoom in = decrease distance
-        ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.2)
+        -- Zoom in = increase distance for closer view
+        ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.2)
         model:SetPortraitZoom(ModelViewer.modelDistance)
     end)
 
     local zoomOutBtn = CreateControlButton(controlBar, "common-icon-zoomout-disable", "Zoom Out")
     zoomOutBtn:SetPoint("LEFT", zoomInBtn, "RIGHT", 4, 0)
     zoomOutBtn:SetScript("OnClick", function()
-        -- Zoom out = increase distance
-        ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.2)
+        -- Zoom out = decrease distance for farther view
+        ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.2)
         model:SetPortraitZoom(ModelViewer.modelDistance)
     end)
 
