@@ -12,11 +12,13 @@ local UI_VIEWPORT_HEIGHT = 500 -- Taller for large NPCs
 local UI_INFO_HEIGHT = 160
 local UI_SEARCH_HEIGHT = 34
 local UI_HEADER_HEIGHT = 34
+local UI_DETAIL_TEXT_SIZE = 12
 local UI_PADDING = 8 -- Spacing between elements
 
 -- =========================================================
 -- Small utils
 -- =========================================================
+
 local function Trim(text)
     if not text then
         return ""
@@ -55,6 +57,8 @@ local ModelViewer = {
     _nameIndex = nil, -- array: { {name="X", lower="x"} ... }
     _pendingSuggestToken = 0,
     lookup = nil,     -- runtime lookup for DB
+    searchType = "Name",
+    filters = {},     -- Active detail filters
 
     -- Browsing state
     _curGlobalIdx = 0,
@@ -158,31 +162,6 @@ function ModelViewer:Ensure()
     searchGroup:SetSize(UI_WIDTH - 20, UI_SEARCH_HEIGHT)
     searchGroup:SetPoint("TOP", header, "BOTTOM", 0, -UI_PADDING)
 
-    -- Custom Search Bar (EditBox)
-    local inputContainer = CreateFrame("Frame", nil, searchGroup, "BackdropTemplate")
-    inputContainer:SetHeight(UI_SEARCH_HEIGHT)
-    inputContainer:SetPoint("LEFT", 0, 0)
-    inputContainer:SetPoint("RIGHT", -100, 0)
-    inputContainer:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1
-    })
-    inputContainer:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
-    inputContainer:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-
-    local input = CreateFrame("EditBox", nil, inputContainer)
-    input:SetAllPoints(inputContainer)
-    input:SetTextInsets(10, 10, 0, 0)
-    input:SetFont("Fonts\\FRIZQT__.TTF", 14, "")
-    input:SetTextColor(1, 1, 1)
-    input:SetAutoFocus(false)
-    input:SetText("")
-    input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    inputContainer:SetScript("OnMouseDown", function() input:SetFocus() end)
-
-    -- Modern styled search button
     local function CreateModernButton(parent, text, width)
         local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
         btn:SetSize(width or 90, 28)
@@ -214,6 +193,73 @@ function ModelViewer:Ensure()
 
         return btn
     end
+
+    -- Search Type Dropdown
+    local typeBtn = CreateModernButton(searchGroup, "Name ▼", 100)
+    typeBtn:SetPoint("LEFT", 0, 0)
+    typeBtn:SetHeight(UI_SEARCH_HEIGHT)
+
+    local typeMenu = CreateFrame("Frame", nil, typeBtn, "BackdropTemplate")
+    typeMenu:SetSize(100, 75)
+    typeMenu:SetPoint("TOP", typeBtn, "BOTTOM", 0, -2)
+    typeMenu:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    typeMenu:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+    typeMenu:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    typeMenu:SetFrameStrata("TOOLTIP")
+    typeMenu:Hide()
+
+    local function CreateMenuButton(text, yOff)
+        local btn = CreateFrame("Button", nil, typeMenu)
+        btn:SetSize(90, 20)
+        btn:SetPoint("TOP", 0, yOff)
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("LEFT", 5, 0)
+        lbl:SetText(text)
+        btn:SetScript("OnClick", function()
+            ModelViewer.searchType = text
+            typeBtn.label:SetText(text .. " ▼")
+            typeMenu:Hide()
+        end)
+        btn:SetScript("OnEnter", function() lbl:SetTextColor(1, 0.82, 0) end)
+        btn:SetScript("OnLeave", function() lbl:SetTextColor(1, 1, 1) end)
+        return btn
+    end
+
+    CreateMenuButton("Name", -5)
+    CreateMenuButton("NPC ID", -25)
+    CreateMenuButton("Display ID", -45)
+
+    typeBtn:SetScript("OnClick", function()
+        if typeMenu:IsShown() then typeMenu:Hide() else typeMenu:Show() end
+    end)
+
+    -- Custom Search Bar (EditBox)
+    local inputContainer = CreateFrame("Frame", nil, searchGroup, "BackdropTemplate")
+    inputContainer:SetHeight(UI_SEARCH_HEIGHT)
+    inputContainer:SetPoint("LEFT", typeBtn, "RIGHT", 8, 0)
+    inputContainer:SetPoint("RIGHT", -100, 0)
+    inputContainer:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    inputContainer:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+    inputContainer:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+
+    local input = CreateFrame("EditBox", nil, inputContainer)
+    input:SetAllPoints(inputContainer)
+    input:SetTextInsets(10, 10, 0, 0)
+    input:SetFont("Fonts\\FRIZQT__.TTF", 14, "")
+    input:SetTextColor(1, 1, 1)
+    input:SetAutoFocus(false)
+    input:SetText("")
+    input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    inputContainer:SetScript("OnMouseDown", function() input:SetFocus() end)
 
     local go = CreateModernButton(searchGroup, "SEARCH", 90)
     go:SetPoint("LEFT", inputContainer, "RIGHT", 8, 0)
@@ -580,27 +626,87 @@ function ModelViewer:Ensure()
     leftCol:SetSize(200, 100)
     leftCol:SetPoint("TOPLEFT", 10, -55)
 
-    local function CreateSpecLabel(parent, labelText, yOff)
-        local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        lbl:SetPoint("TOP", 0, yOff)
+    local function CreateSpecLabel(parent, labelText, yOff, category)
+        local btn = CreateFrame("Button", nil, parent)
+        btn:SetSize(parent:GetWidth(), 11)
+        btn:SetPoint("TOP", 0, yOff)
+
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        lbl:SetPoint("CENTER", 0, 0)
         lbl:SetText(labelText:upper())
         lbl:SetTextColor(0.4, 0.4, 0.4)
+        btn.lbl = lbl
+
         local val = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        val:SetPoint("TOP", lbl, "BOTTOM", 0, -2)
+        val:SetPoint("TOP", btn, "BOTTOM", 0, -2)
         val:SetText("-")
+        val:SetFont("Fonts\\FRIZQT__.TTF", UI_DETAIL_TEXT_SIZE, "")
+
+        if category then
+            btn:SetScript("OnClick", function()
+                self:ShowMiniSearch(category, btn)
+            end)
+            btn:SetScript("OnEnter", function() lbl:SetTextColor(0.8, 0.6, 0) end)
+            btn:SetScript("OnLeave", function() lbl:SetTextColor(0.4, 0.4, 0.4) end)
+        end
+
         return val
     end
 
-    self.typeLabel = CreateSpecLabel(leftCol, "Type / Family", 0)
-    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -40)
+    self.typeLabel = CreateSpecLabel(leftCol, "Type / Family", 0, "type")
+    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -40, "zone")
 
     -- 3. Right Column (World/Source)
     local rightCol = CreateFrame("Frame", nil, infoBox)
     rightCol:SetSize(200, 100)
     rightCol:SetPoint("TOPRIGHT", -10, -55)
 
-    self.locLabel = CreateSpecLabel(rightCol, "Location", 0)
-    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40)
+    self.locLabel = CreateSpecLabel(rightCol, "Location", 0, "instance")
+    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40, "patch")
+
+    -- Sidebar for filtered results
+    local sidebarHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 3)
+    local sidebar = CreateFrame("Frame", "NPCDV_Sidebar", frame, "BackdropTemplate")
+    sidebar:SetSize(220, sidebarHeight)
+    sidebar:SetPoint("TOPLEFT", frame, "TOPRIGHT", 5, 0)
+    sidebar:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    sidebar:SetBackdropColor(0.02, 0.02, 0.02, 0.98)
+    sidebar:SetBackdropBorderColor(1, 1, 1, 0.1)
+    sidebar:Hide()
+    self.sidebar = sidebar
+
+    local lateralTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lateralTitle:SetPoint("TOP", 0, -10)
+    lateralTitle:SetText("FILTERED NPCS")
+    lateralTitle:SetTextColor(0.8, 0.6, 0)
+
+    local clearFilters = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
+    clearFilters:SetSize(80, 16)
+    clearFilters:SetPoint("TOPRIGHT", -5, -8)
+    local clearTxt = clearFilters:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    clearTxt:SetPoint("CENTER")
+    clearTxt:SetText("CLEAR")
+    clearFilters:SetScript("OnClick", function()
+        ModelViewer.filters = {}
+        ModelViewer:UpdateSidebar()
+    end)
+    clearFilters:SetScript("OnEnter", function() clearTxt:SetTextColor(1, 0.2, 0.2) end)
+    clearFilters:SetScript("OnLeave", function() clearTxt:SetTextColor(0.4, 0.4, 0.4) end)
+
+    local scrollFrame = CreateFrame("ScrollFrame", "NPCDV_SidebarScroll", sidebar, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", 5, -30)
+    scrollFrame:SetPoint("BOTTOMRIGHT", -25, 5)
+
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetSize(190, 1)
+    scrollFrame:SetScrollChild(scrollChild)
+    self.sidebarContent = scrollChild
+
+    self.sidebarButtons = {}
 
     -- Timer for debounce
     self._searchTimer = nil
@@ -1121,7 +1227,7 @@ function ModelViewer:ShowSuggestions(matches)
 end
 
 function ModelViewer:ComputeSuggestions(typed)
-    local results = NPCDataViewerAPI:Search(typed)
+    local results = NPCDataViewerAPI:Search(typed, "Name")
     if not results then return {} end
 
     local matches = {}
@@ -1247,7 +1353,7 @@ function ModelViewer:ApplyInput()
     local raw = Trim(self.input:GetText())
     if raw == "" then return end
 
-    local results = NPCDataViewerAPI:Search(raw)
+    local results = NPCDataViewerAPI:Search(raw, self.searchType)
     if results then
         self._curResults = results
         self._curResultIdx = 1
@@ -1383,6 +1489,226 @@ function ModelViewer:LoadSpecific(npcId, displayId, name)
     end
 
     self:SyncState()
+end
+
+function ModelViewer:ShowMiniSearch(category, anchor)
+    if self.miniSearch and self.miniSearch:IsShown() and self.miniSearch.category == category then
+        self.miniSearch:Hide()
+        return
+    end
+
+    if not self.miniSearch then
+        local ms = CreateFrame("Frame", nil, self.frame, "BackdropTemplate")
+        ms:SetSize(200, 220)
+        ms:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        ms:SetBackdropColor(0.05, 0.05, 0.05, 0.98)
+        ms:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+        ms:SetFrameStrata("TOOLTIP")
+
+        local input = CreateFrame("EditBox", nil, ms, "BackdropTemplate")
+        input:SetSize(170, 22)
+        input:SetPoint("TOP", 0, -8)
+        input:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        input:SetBackdropColor(0.1, 0.1, 0.1, 1)
+        input:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+        input:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+        input:SetTextInsets(5, 5, 0, 0)
+
+        local scrollFrame = CreateFrame("ScrollFrame", nil, ms, "UIPanelScrollFrameTemplate")
+        scrollFrame:SetPoint("TOPLEFT", 5, -38)
+        scrollFrame:SetPoint("BOTTOMRIGHT", -25, 8)
+
+        local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+        scrollChild:SetSize(160, 1)
+        scrollFrame:SetScrollChild(scrollChild)
+
+        ms.input = input
+        ms.scrollChild = scrollChild
+        ms.buttons = {}
+
+        input:SetScript("OnTextChanged", function(s, userInput)
+            if userInput then ModelViewer:UpdateMiniSearch(ms.category, s:GetText()) end
+        end)
+        input:SetScript("OnEscapePressed", function() ms:Hide() end)
+
+        self.miniSearch = ms
+    end
+
+    self.miniSearch.category = category
+    self.miniSearch:ClearAllPoints()
+    self.miniSearch:SetPoint("BOTTOM", anchor, "TOP", 0, 5)
+    self.miniSearch.input:SetText("")
+    self.miniSearch.input:SetFocus()
+    self.miniSearch:Show()
+    self:UpdateMiniSearch(category, "")
+end
+
+function ModelViewer:UpdateMiniSearch(category, text)
+    local ms = self.miniSearch
+    if not ms or not ms.scrollChild then
+        return
+    end
+
+    -- HARDEN: ensure buttons is always a table (prevents nil/invalid type crashes at ms.buttons[i])
+    if type(ms.buttons) ~= "table" then
+        ms.buttons = {}
+    end
+
+    local q = ToLowerSafe(text)
+    local matches = {}
+
+    local idx = NPCDataViewer_Indexes and NPCDataViewer_Indexes[category]
+    if type(idx) == "table" then
+        for id, label in pairs(idx) do
+            if ToLowerSafe(label):find(q, 1, true) then
+                matches[#matches + 1] = { id = id, label = label }
+            end
+        end
+    end
+    table.sort(matches, function(a, b) return a.label < b.label end)
+
+    local sc = ms.scrollChild
+    for _, btn in ipairs(ms.buttons) do
+        btn:Hide()
+    end
+
+    for i, match in ipairs(matches) do
+        local btn = ms.buttons[i]
+        if not btn then
+            btn = CreateFrame("Button", nil, sc)
+            btn:SetSize(150, 18)
+            btn:SetNormalFontObject("GameFontHighlightSmall")
+
+            local fs = btn:GetFontString()
+            if fs then
+                fs:ClearAllPoints()
+                fs:SetPoint("LEFT", 5, 0)
+                fs:SetJustifyH("LEFT")
+            end
+
+            btn:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
+            local hl = btn:GetHighlightTexture()
+            if hl then
+                hl:SetVertexColor(1, 1, 1, 0.1)
+            end
+
+            ms.buttons[i] = btn
+        end
+
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", 0, -(i - 1) * 18)
+        btn:SetText(match.label)
+
+        btn:SetScript("OnClick", function()
+            self:SetFilter(category, match.id, match.label)
+            ms:Hide()
+        end)
+
+        btn:Show()
+    end
+
+    sc:SetHeight(#matches * 18)
+end
+
+function ModelViewer:SetFilter(category, id, label)
+    self.filters[category] = id
+    NPCDV_Print("Filter added: " .. category .. " = " .. label)
+    self:UpdateSidebar()
+end
+
+function ModelViewer:UpdateSidebar()
+    if not self.sidebar then return end
+
+    local results = {}
+    local hasFilters = false
+    for _ in pairs(self.filters) do
+        hasFilters = true; break
+    end
+
+    if not hasFilters then
+        self.sidebar:Hide()
+        return
+    end
+
+    self.sidebar:Show()
+
+    local seen = {}
+    local function Check(data, name)
+        local match = true
+        for cat, filterId in pairs(self.filters) do
+            local catData = data[cat]
+            if not catData then
+                match = false
+                break
+            end
+
+            local foundInCat = false
+            local npcList = catData[filterId]
+            if npcList then
+                if type(npcList) == "table" then
+                    if #npcList > 0 then foundInCat = true end
+                else
+                    foundInCat = true
+                end
+            end
+            if not foundInCat then
+                match = false
+                break
+            end
+        end
+
+        if match and not seen[name] then
+            seen[name] = true
+            table.insert(results, name)
+        end
+    end
+
+    -- Scan Loaded Buckets
+    if NPCDataViewer_Data then
+        for _, bucket in pairs(NPCDataViewer_Data) do
+            for name, data in pairs(bucket) do
+                Check(data, name)
+            end
+        end
+    end
+
+    table.sort(results)
+
+    local sc = self.sidebarContent
+    for _, btn in ipairs(self.sidebarButtons) do btn:Hide() end
+
+    for i, name in ipairs(results) do
+        local btn = self.sidebarButtons[i]
+        if not btn then
+            btn = CreateFrame("Button", nil, sc, "BackdropTemplate")
+            btn:SetSize(180, 20)
+            local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            lbl:SetPoint("LEFT", 5, 0)
+            lbl:SetPoint("RIGHT", -5, 0)
+            lbl:SetWordWrap(false)
+            lbl:SetJustifyH("LEFT")
+            btn.label = lbl
+            btn:SetScript("OnEnter", function(s) s.label:SetTextColor(1, 0.82, 0) end)
+            btn:SetScript("OnLeave", function(s) s.label:SetTextColor(1, 1, 1) end)
+            self.sidebarButtons[i] = btn
+        end
+        btn:SetPoint("TOPLEFT", 0, -(i - 1) * 22)
+        btn.label:SetText(name)
+        btn:SetScript("OnClick", function()
+            self:ApplyName(name)
+        end)
+        btn:Show()
+        if i >= 100 then break end
+    end
+    sc:SetHeight(#results * 22)
 end
 
 -- =========================================================

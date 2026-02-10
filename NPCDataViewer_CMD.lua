@@ -146,18 +146,102 @@ end
 -- Search Implementation
 -- =========================================================
 
-function NPCDataViewerAPI:Search(query)
+function NPCDataViewerAPI:Search(query, searchType)
+    searchType = searchType or "Name"
     local q = Normalize(query)
-    if #q < 3 then return nil end
 
-    -- Check Cache
-    local cache = NPCDataViewerDB.searchCache
-    for i, entry in ipairs(cache) do
-        if entry.q == q then
-            table.remove(cache, i)
-            table.insert(cache, 1, entry)
-            return entry.results
+    if searchType == "Name" then
+        if #q < 3 then return nil end
+    else
+        if #q < 1 then return nil end
+    end
+
+    -- Check Cache (Only for Name search for now to keep it simple)
+    if searchType == "Name" then
+        local cache = NPCDataViewerDB.searchCache
+        for i, entry in ipairs(cache) do
+            if entry.q == q then
+                table.remove(cache, i)
+                table.insert(cache, 1, entry)
+                return entry.results
+            end
         end
+    end
+
+    local results = {}
+    local searchedBuckets = {}
+    local seenPairs = {}
+
+    if searchType == "NPC ID" or searchType == "Display ID" then
+        local targetId = tonumber(q)
+        if not targetId then return nil end
+
+        -- For ID search, we must scan all buckets unless we have a global ID index.
+        -- Given the architecture, we'll probe buckets or use the already loaded ones.
+        -- To be efficient, we'll try to find which buckets contain these IDs.
+        -- However, without a manifest, we'd have to load everything.
+        -- For now, let's search in LOADED buckets and maybe some common ones.
+
+        -- Better: Since we don't have a global ID -> Name map, we'll scan NPCDataViewer_Data if present.
+        if NPCDataViewer_Data then
+            for groupKey, bucket in pairs(NPCDataViewer_Data) do
+                for realName, data in pairs(bucket) do
+                    if data.ids then
+                        for npcId, displayIds in pairs(data.ids) do
+                            local match = false
+                            if searchType == "NPC ID" and tonumber(npcId) == targetId then
+                                match = true
+                            elseif searchType == "Display ID" then
+                                if type(displayIds) == "table" then
+                                    for _, did in ipairs(displayIds) do
+                                        if tonumber(did) == targetId then
+                                            match = true; break
+                                        end
+                                    end
+                                elseif tonumber(displayIds) == targetId then
+                                    match = true
+                                end
+                            end
+
+                            if match then
+                                self:AppendResults(results, realName, data, seenPairs)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- Also check Harvested DB
+        local hdb = NPCDataViewerDB
+        if hdb and hdb.displayIdBatches then
+            for _, batch in pairs(hdb.displayIdBatches) do
+                for _, entry in pairs(batch) do
+                    local match = false
+                    if searchType == "NPC ID" and entry.NPC_ID == targetId then
+                        match = true
+                    elseif searchType == "Display ID" and entry.Display_ID == targetId then
+                        match = true
+                    end
+                    if match then
+                        -- For harvested, we don't have the full bucket data object
+                        -- We'll create a synthetic result
+                        local key = entry.NPC_Name .. "_" .. tostring(entry.NPC_ID) .. "_" .. tostring(entry.Display_ID)
+                        if not seenPairs[key] then
+                            seenPairs[key] = true
+                            table.insert(results, {
+                                name = entry.NPC_Name,
+                                npcId = entry.NPC_ID,
+                                displayId = entry.Display_ID,
+                                -- (other fields unknown from harvested)
+                            })
+                        end
+                    end
+                end
+            end
+        end
+
+        if #results > 0 then return results end
+        return nil
     end
 
     -- Find Buckets
@@ -226,9 +310,12 @@ function NPCDataViewerAPI:Search(query)
             return tostring(a.displayId) < tostring(b.displayId)
         end)
 
-        -- Cache results
-        table.insert(cache, 1, { q = q, results = results })
-        while #cache > 20 do table.remove(cache) end
+        -- Cache results (only for Name search)
+        if searchType == "Name" then
+            local cache = NPCDataViewerDB.searchCache
+            table.insert(cache, 1, { q = q, results = results })
+            while #cache > 20 do table.remove(cache) end
+        end
         return results
     end
 
