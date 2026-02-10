@@ -1743,17 +1743,15 @@ function ModelViewer:BindEvents()
 end
 
 -- =========================================================
--- Slash command: /npcviewer  OR  /npcviewer export
+-- Slash commands: /npcviewer, /ndv, /npcdataviewer
 -- =========================================================
 SLASH_NPCVIEWER1 = "/npcviewer"
+SLASH_NPCVIEWER2 = "/ndv"
+SLASH_NPCVIEWER3 = "/npcdataviewer"
+
 SlashCmdList.NPCVIEWER = function(message)
     ModelViewer:Ensure()
     ModelViewer:BindEvents()
-
-    message = Trim(message)
-    if message == "export" then
-        return
-    end
 
     if ModelViewer.frame:IsShown() then
         ModelViewer:Hide()
@@ -1764,8 +1762,6 @@ SlashCmdList.NPCVIEWER = function(message)
     ModelViewer.input:SetFocus()
     ModelViewer:BuildNameIndexIfNeeded()
 end
-
--- Harvesting logic removed.
 
 -- =========================================================
 -- Addon init
