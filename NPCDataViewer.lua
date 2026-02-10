@@ -98,6 +98,7 @@ function ModelViewer:Ensure()
         return
     end
 
+    self.filters = self.filters or {}
     local frame = CreateFrame("Frame", "NPCDataViewerFrame", UIParent, "BackdropTemplate")
     local totalHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 4)
     frame:SetSize(UI_WIDTH, totalHeight)
@@ -664,6 +665,16 @@ function ModelViewer:Ensure()
     self.locLabel = CreateSpecLabel(rightCol, "Location", 0, "instance")
     self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40, "patch")
 
+    local CATEGORY_MAP = {
+        type           = "types",
+        zone           = "zones",
+        instance       = "inst",
+        patch          = "patch",
+        family         = "fams",
+        classification = "class"
+    }
+    self.CATEGORY_MAP = CATEGORY_MAP
+
     -- Sidebar for filtered results
     local sidebarHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 3)
     local sidebar = CreateFrame("Frame", "NPCDV_Sidebar", frame, "BackdropTemplate")
@@ -684,6 +695,33 @@ function ModelViewer:Ensure()
     lateralTitle:SetText("FILTERED NPCS")
     lateralTitle:SetTextColor(0.8, 0.6, 0)
 
+    -- Filter labels section
+    local filterStatus = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
+    filterStatus:SetSize(210, 65)
+    filterStatus:SetPoint("TOP", 0, -35)
+    filterStatus:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    filterStatus:SetBackdropColor(1, 1, 1, 0.03)
+    filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1)
+    self.filterStatus = filterStatus
+
+    local fsText = filterStatus:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    fsText:SetPoint("TOPLEFT", 8, -8)
+    fsText:SetJustifyH("LEFT")
+    fsText:SetText("Active Filters:")
+    self.filterStatusText = fsText
+
+    -- Allow clicking status box to clear or change
+    filterStatus:SetScript("OnClick", function()
+        self.filters = {}
+        self:UpdateSidebar()
+    end)
+    filterStatus:SetScript("OnEnter", function() filterStatus:SetBackdropBorderColor(0.8, 0.6, 0, 0.5) end)
+    filterStatus:SetScript("OnLeave", function() filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1) end)
+
     local clearFilters = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
     clearFilters:SetSize(80, 16)
     clearFilters:SetPoint("TOPRIGHT", -5, -8)
@@ -698,7 +736,7 @@ function ModelViewer:Ensure()
     clearFilters:SetScript("OnLeave", function() clearTxt:SetTextColor(0.4, 0.4, 0.4) end)
 
     local scrollFrame = CreateFrame("ScrollFrame", "NPCDV_SidebarScroll", sidebar, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 5, -30)
+    scrollFrame:SetPoint("TOPLEFT", 5, -105)
     scrollFrame:SetPoint("BOTTOMRIGHT", -25, 5)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -1553,32 +1591,31 @@ end
 
 function ModelViewer:UpdateMiniSearch(category, text)
     local ms = self.miniSearch
-    if not ms or not ms.scrollChild then
-        return
-    end
+    if not ms or not ms.scrollChild then return end
 
-    -- HARDEN: ensure buttons is always a table (prevents nil/invalid type crashes at ms.buttons[i])
-    if type(ms.buttons) ~= "table" then
-        ms.buttons = {}
-    end
+    if type(ms.buttons) ~= "table" then ms.buttons = {} end
 
     local q = ToLowerSafe(text)
     local matches = {}
 
-    local idx = NPCDataViewer_Indexes and NPCDataViewer_Indexes[category]
+    -- Cascading logic: find IDs that are actually present given other active filters
+    local eligibleIds = self:GetEligibleIds(category)
+
+    local idx = NPCDataViewer_Indexes and
+        NPCDataViewer_Indexes[category == "instance" and "instance" or (category == "zone" and "zone" or category)]
     if type(idx) == "table" then
         for id, label in pairs(idx) do
             if ToLowerSafe(label):find(q, 1, true) then
-                matches[#matches + 1] = { id = id, label = label }
+                if not eligibleIds or eligibleIds[id] then
+                    matches[#matches + 1] = { id = id, label = label }
+                end
             end
         end
     end
     table.sort(matches, function(a, b) return a.label < b.label end)
 
     local sc = ms.scrollChild
-    for _, btn in ipairs(ms.buttons) do
-        btn:Hide()
-    end
+    for _, btn in ipairs(ms.buttons) do btn:Hide() end
 
     for i, match in ipairs(matches) do
         local btn = ms.buttons[i]
@@ -1586,51 +1623,157 @@ function ModelViewer:UpdateMiniSearch(category, text)
             btn = CreateFrame("Button", nil, sc)
             btn:SetSize(150, 18)
             btn:SetNormalFontObject("GameFontHighlightSmall")
-
             local fs = btn:GetFontString()
             if fs then
                 fs:ClearAllPoints()
                 fs:SetPoint("LEFT", 5, 0)
                 fs:SetJustifyH("LEFT")
             end
-
             btn:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
             local hl = btn:GetHighlightTexture()
-            if hl then
-                hl:SetVertexColor(1, 1, 1, 0.1)
-            end
-
+            if hl then hl:SetVertexColor(1, 1, 1, 0.1) end
             ms.buttons[i] = btn
         end
-
         btn:ClearAllPoints()
         btn:SetPoint("TOPLEFT", 0, -(i - 1) * 18)
         btn:SetText(match.label)
-
         btn:SetScript("OnClick", function()
             self:SetFilter(category, match.id, match.label)
             ms:Hide()
         end)
-
         btn:Show()
     end
-
     sc:SetHeight(#matches * 18)
 end
 
 function ModelViewer:SetFilter(category, id, label)
+    if type(self.filters) ~= "table" then
+        self.filters = {}
+    end
+
     self.filters[category] = id
-    NPCDV_Print("Filter added: " .. category .. " = " .. label)
+    NPCDV_Print("Filter added: " .. category .. " = " .. (label or tostring(id)))
     self:UpdateSidebar()
+end
+
+function ModelViewer:CheckFilters(data, ignoreCategory)
+    local filters = self.filters
+    if type(filters) ~= "table" then
+        return true
+    end
+
+    local activeFilters = {}
+    for cat, val in pairs(filters) do
+        if cat ~= ignoreCategory then
+            activeFilters[cat] = val
+        end
+    end
+    if not next(activeFilters) then return true end
+
+    local possibleNpcIds = {}
+
+    -- Prefer explicit ids list when present, otherwise derive from category buckets
+    if type(data.ids) == "table" then
+        for npcId in pairs(data.ids) do
+            possibleNpcIds[tonumber(npcId) or npcId] = true
+        end
+    else
+        -- Derive possible NPC IDs from any available category mapping buckets
+        for _, field in pairs(self.CATEGORY_MAP) do
+            local fieldData = data[field]
+            if type(fieldData) == "table" then
+                for _, nids in pairs(fieldData) do
+                    local nlist = type(nids) == "table" and nids or { nids }
+                    for _, nid in ipairs(nlist) do
+                        possibleNpcIds[tonumber(nid) or nid] = true
+                    end
+                end
+            end
+        end
+
+        -- If we still have no base IDs, this record can't satisfy active filters
+        if not next(possibleNpcIds) then
+            return false
+        end
+    end
+
+    for cat, filterId in pairs(activeFilters) do
+        local field = self.CATEGORY_MAP[cat]
+        local fieldData = data[field]
+        if not fieldData then return false end
+
+        local validNpcIds = {}
+        if cat == "instance" then
+            local encounters = fieldData[filterId]
+            if not encounters then return false end
+            local encData = data["enc"]
+            if not encData then return false end
+            local elist = type(encounters) == "table" and encounters or { encounters }
+            for _, eid in ipairs(elist) do
+                local nids = encData[eid]
+                if nids then
+                    local nlist = type(nids) == "table" and nids or { nids }
+                    for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
+                end
+            end
+        else
+            local nids = fieldData[filterId]
+            if not nids then return false end
+            local nlist = type(nids) == "table" and nids or { nids }
+            for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
+        end
+
+        local anyMatch = false
+        for nid in pairs(possibleNpcIds) do
+            if not validNpcIds[nid] then
+                possibleNpcIds[nid] = nil
+            else
+                anyMatch = true
+            end
+        end
+        if not anyMatch then return false end
+    end
+
+    return next(possibleNpcIds) ~= nil
+end
+
+function ModelViewer:GetEligibleIds(category)
+    local eligible = {}
+    if not NPCDataViewer_Data then return nil end
+    local field = self.CATEGORY_MAP[category]
+    if not field then return nil end
+
+    for _, bucket in pairs(NPCDataViewer_Data) do
+        for name, data in pairs(bucket) do
+            if self:CheckFilters(data, category) then
+                local fieldData = data[field]
+                if fieldData then
+                    for id in pairs(fieldData) do eligible[id] = true end
+                end
+            end
+        end
+    end
+    return eligible
 end
 
 function ModelViewer:UpdateSidebar()
     if not self.sidebar then return end
 
     local results = {}
+    local activeStr = ""
     local hasFilters = false
-    for _ in pairs(self.filters) do
-        hasFilters = true; break
+
+    local idx = NPCDataViewer_Indexes
+    for cat, id in pairs(self.filters) do
+        hasFilters = true
+        local label = "Unknown"
+        if idx then
+            local indexKey = cat == "instance" and "instance" or (cat == "zone" and "zone" or cat)
+            if idx[indexKey] then
+                label = idx[indexKey][id] or tostring(id)
+            end
+        end
+        activeStr = activeStr .. "|cFFFFD100" .. cat:upper() .. ":|r " .. label .. "\n"
     end
 
     if not hasFilters then
@@ -1639,43 +1782,18 @@ function ModelViewer:UpdateSidebar()
     end
 
     self.sidebar:Show()
+    self.filterStatusText:SetText("Active Filters:\n" .. activeStr)
 
     local seen = {}
-    local function Check(data, name)
-        local match = true
-        for cat, filterId in pairs(self.filters) do
-            local catData = data[cat]
-            if not catData then
-                match = false
-                break
-            end
-
-            local foundInCat = false
-            local npcList = catData[filterId]
-            if npcList then
-                if type(npcList) == "table" then
-                    if #npcList > 0 then foundInCat = true end
-                else
-                    foundInCat = true
-                end
-            end
-            if not foundInCat then
-                match = false
-                break
-            end
-        end
-
-        if match and not seen[name] then
-            seen[name] = true
-            table.insert(results, name)
-        end
-    end
-
-    -- Scan Loaded Buckets
     if NPCDataViewer_Data then
         for _, bucket in pairs(NPCDataViewer_Data) do
             for name, data in pairs(bucket) do
-                Check(data, name)
+                if self:CheckFilters(data) then
+                    if not seen[name] then
+                        seen[name] = true
+                        table.insert(results, name)
+                    end
+                end
             end
         end
     end
@@ -1685,10 +1803,21 @@ function ModelViewer:UpdateSidebar()
     local sc = self.sidebarContent
     for _, btn in ipairs(self.sidebarButtons) do btn:Hide() end
 
+    if #results == 0 then
+        if not self.sidebarNoResults then
+            self.sidebarNoResults = sc:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            self.sidebarNoResults:SetPoint("TOP", 0, -20)
+            self.sidebarNoResults:SetText("No NPCs match these filters.")
+        end
+        self.sidebarNoResults:Show()
+    else
+        if self.sidebarNoResults then self.sidebarNoResults:Hide() end
+    end
+
     for i, name in ipairs(results) do
         local btn = self.sidebarButtons[i]
         if not btn then
-            btn = CreateFrame("Button", nil, sc, "BackdropTemplate")
+            btn = CreateFrame("Button", nil, sc)
             btn:SetSize(180, 20)
             local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             lbl:SetPoint("LEFT", 5, 0)
@@ -1700,6 +1829,7 @@ function ModelViewer:UpdateSidebar()
             btn:SetScript("OnLeave", function(s) s.label:SetTextColor(1, 1, 1) end)
             self.sidebarButtons[i] = btn
         end
+        btn:ClearAllPoints()
         btn:SetPoint("TOPLEFT", 0, -(i - 1) * 22)
         btn.label:SetText(name)
         btn:SetScript("OnClick", function()
@@ -1708,7 +1838,7 @@ function ModelViewer:UpdateSidebar()
         btn:Show()
         if i >= 100 then break end
     end
-    sc:SetHeight(#results * 22)
+    sc:SetHeight(math.max(1, #results * 22))
 end
 
 -- =========================================================
