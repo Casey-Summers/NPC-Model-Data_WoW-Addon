@@ -629,33 +629,47 @@ function ModelViewer:Ensure()
 
     local function CreateSpecLabel(parent, labelText, yOff, category)
         local btn = CreateFrame("Button", nil, parent)
-        btn:SetSize(parent:GetWidth(), 11)
+        btn:SetSize(parent:GetWidth(), 38)
         btn:SetPoint("TOP", 0, yOff)
 
-        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        lbl:SetPoint("CENTER", 0, 0)
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetSize(parent:GetWidth(), 12)
+        lbl:SetPoint("TOP", 0, 0)
         lbl:SetText(labelText:upper())
-        lbl:SetTextColor(0.4, 0.4, 0.4)
+        lbl:SetTextColor(1, 0.82, 0) -- Gold
         btn.lbl = lbl
 
-        local val = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        val:SetPoint("TOP", btn, "BOTTOM", 0, -2)
+        local val = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        val:SetPoint("TOP", lbl, "BOTTOM", 0, 0)
+        val:SetPoint("LEFT", 5, 0)
+        val:SetPoint("RIGHT", -5, 0)
+        val:SetHeight(26)
         val:SetText("-")
         val:SetFont("Fonts\\FRIZQT__.TTF", UI_DETAIL_TEXT_SIZE, "")
+        val:SetWordWrap(true)
+        val:SetMaxLines(2)
+        val:SetJustifyH("CENTER")
+        val:SetJustifyV("TOP")
 
         if category then
             btn:SetScript("OnClick", function()
                 self:ShowMiniSearch(category, btn)
             end)
-            btn:SetScript("OnEnter", function() lbl:SetTextColor(0.8, 0.6, 0) end)
-            btn:SetScript("OnLeave", function() lbl:SetTextColor(0.4, 0.4, 0.4) end)
+            btn:SetScript("OnEnter", function()
+                lbl:SetTextColor(1, 1, 1)
+                val:SetTextColor(1, 0.82, 0)
+            end)
+            btn:SetScript("OnLeave", function()
+                lbl:SetTextColor(1, 0.82, 0)
+                val:SetTextColor(1, 1, 1)
+            end)
         end
 
         return val
     end
 
     self.typeLabel = CreateSpecLabel(leftCol, "Type / Family", 0, "type")
-    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -40, "zone")
+    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -45, "zone")
 
     -- 3. Right Column (World/Source)
     local rightCol = CreateFrame("Frame", nil, infoBox)
@@ -663,7 +677,7 @@ function ModelViewer:Ensure()
     rightCol:SetPoint("TOPRIGHT", -10, -55)
 
     self.locLabel = CreateSpecLabel(rightCol, "Location", 0, "instance")
-    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -40, "patch")
+    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -45, "patch")
 
     local CATEGORY_MAP = {
         type           = "types",
@@ -717,10 +731,17 @@ function ModelViewer:Ensure()
     -- Allow clicking status box to clear or change
     filterStatus:SetScript("OnClick", function()
         self.filters = {}
-        self:UpdateSidebar()
+        self:UpdateSidebar(true)
+        NPCDV_Print("All filters cleared.")
     end)
-    filterStatus:SetScript("OnEnter", function() filterStatus:SetBackdropBorderColor(0.8, 0.6, 0, 0.5) end)
-    filterStatus:SetScript("OnLeave", function() filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1) end)
+    filterStatus:SetScript("OnEnter", function()
+        filterStatus:SetBackdropBorderColor(0.8, 0.6, 0, 0.5)
+        filterStatus:SetBackdropColor(1, 1, 1, 0.08)
+    end)
+    filterStatus:SetScript("OnLeave", function()
+        filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1)
+        filterStatus:SetBackdropColor(1, 1, 1, 0.03)
+    end)
 
     local clearFilters = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
     clearFilters:SetSize(80, 16)
@@ -730,7 +751,7 @@ function ModelViewer:Ensure()
     clearTxt:SetText("CLEAR")
     clearFilters:SetScript("OnClick", function()
         ModelViewer.filters = {}
-        ModelViewer:UpdateSidebar()
+        ModelViewer:UpdateSidebar(true)
     end)
     clearFilters:SetScript("OnEnter", function() clearTxt:SetTextColor(1, 0.2, 0.2) end)
     clearFilters:SetScript("OnLeave", function() clearTxt:SetTextColor(0.4, 0.4, 0.4) end)
@@ -770,12 +791,12 @@ function ModelViewer:Ensure()
 
         local prev = CreateAtlasButton(cont, "shop-header-arrow-disabled", 0, false)
         prev:SetSize(20, 20)
-        prev:SetPoint("RIGHT", val, "LEFT", -40, 0)
+        prev:SetPoint("RIGHT", val, "LEFT", -8, 0)
         prev:SetScript("OnClick", onPrev)
 
         local next = CreateAtlasButton(cont, "shop-header-arrow-disabled", 0, true)
         next:SetSize(20, 20)
-        next:SetPoint("LEFT", val, "RIGHT", 40, 0)
+        next:SetPoint("LEFT", val, "RIGHT", 8, 0)
         next:SetScript("OnClick", onNext)
 
         local count = cont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1653,7 +1674,7 @@ function ModelViewer:SetFilter(category, id, label)
 
     self.filters[category] = id
     NPCDV_Print("Filter added: " .. category .. " = " .. (label or tostring(id)))
-    self:UpdateSidebar()
+    self:UpdateSidebar(true)
 end
 
 function ModelViewer:CheckFilters(data, ignoreCategory)
@@ -1679,13 +1700,32 @@ function ModelViewer:CheckFilters(data, ignoreCategory)
         end
     else
         -- Derive possible NPC IDs from any available category mapping buckets
-        for _, field in pairs(self.CATEGORY_MAP) do
+        for cat, field in pairs(self.CATEGORY_MAP) do
             local fieldData = data[field]
             if type(fieldData) == "table" then
-                for _, nids in pairs(fieldData) do
-                    local nlist = type(nids) == "table" and nids or { nids }
-                    for _, nid in ipairs(nlist) do
-                        possibleNpcIds[tonumber(nid) or nid] = true
+                if field == "inst" then
+                    -- inst maps instanceId -> encounterId(s)
+                    local encData = data["enc"]
+                    if type(encData) == "table" then
+                        for _, eids in pairs(fieldData) do
+                            local elist = type(eids) == "table" and eids or { eids }
+                            for _, eid in ipairs(elist) do
+                                local nids = encData[eid]
+                                if nids then
+                                    local nlist = type(nids) == "table" and nids or { nids }
+                                    for _, nid in ipairs(nlist) do
+                                        possibleNpcIds[tonumber(nid) or nid] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                else
+                    for _, nids in pairs(fieldData) do
+                        local nlist = type(nids) == "table" and nids or { nids }
+                        for _, nid in ipairs(nlist) do
+                            possibleNpcIds[tonumber(nid) or nid] = true
+                        end
                     end
                 end
             end
@@ -1756,8 +1796,10 @@ function ModelViewer:GetEligibleIds(category)
     return eligible
 end
 
-function ModelViewer:UpdateSidebar()
+function ModelViewer:UpdateSidebar(resetLimit)
     if not self.sidebar then return end
+    if resetLimit then self.sidebarResultsLimit = 100 end
+    self.sidebarResultsLimit = self.sidebarResultsLimit or 100
 
     local results = {}
     local activeStr = ""
@@ -1782,7 +1824,7 @@ function ModelViewer:UpdateSidebar()
     end
 
     self.sidebar:Show()
-    self.filterStatusText:SetText("Active Filters:\n" .. activeStr)
+    self.filterStatusText:SetText("Active Filters (Click to Clear All):\n" .. activeStr)
 
     local seen = {}
     if NPCDataViewer_Data then
@@ -1802,6 +1844,7 @@ function ModelViewer:UpdateSidebar()
 
     local sc = self.sidebarContent
     for _, btn in ipairs(self.sidebarButtons) do btn:Hide() end
+    if self.sidebarPaginationFrame then self.sidebarPaginationFrame:Hide() end
 
     if #results == 0 then
         if not self.sidebarNoResults then
@@ -1814,7 +1857,9 @@ function ModelViewer:UpdateSidebar()
         if self.sidebarNoResults then self.sidebarNoResults:Hide() end
     end
 
-    for i, name in ipairs(results) do
+    local displayCount = math.min(#results, self.sidebarResultsLimit)
+    for i = 1, displayCount do
+        local name = results[i]
         local btn = self.sidebarButtons[i]
         if not btn then
             btn = CreateFrame("Button", nil, sc)
@@ -1836,9 +1881,48 @@ function ModelViewer:UpdateSidebar()
             self:ApplyName(name)
         end)
         btn:Show()
-        if i >= 100 then break end
     end
-    sc:SetHeight(math.max(1, #results * 22))
+
+    local finalY = displayCount * 22
+    if #results > displayCount then
+        if not self.sidebarPaginationFrame then
+            local pf = CreateFrame("Frame", nil, sc)
+            pf:SetSize(180, 50)
+
+            local more = CreateFrame("Button", nil, pf, "BackdropTemplate")
+            more:SetSize(85, 20)
+            more:SetPoint("TOPLEFT", 0, -5)
+            more:SetNormalFontObject("GameFontNormalSmall")
+            more:SetText("Load More")
+            more:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+            more:SetBackdropColor(1, 1, 1, 0.05)
+            more:SetBackdropBorderColor(1, 1, 1, 0.2)
+            more:SetScript("OnClick", function()
+                self.sidebarResultsLimit = self.sidebarResultsLimit + 100
+                self:UpdateSidebar()
+            end)
+
+            local all = CreateFrame("Button", nil, pf, "BackdropTemplate")
+            all:SetSize(85, 20)
+            all:SetPoint("TOPRIGHT", 0, -5)
+            all:SetNormalFontObject("GameFontNormalSmall")
+            all:SetText("Load All")
+            all:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+            all:SetBackdropColor(1, 1, 1, 0.05)
+            all:SetBackdropBorderColor(1, 1, 1, 0.2)
+            all:SetScript("OnClick", function()
+                self.sidebarResultsLimit = 10000
+                self:UpdateSidebar()
+            end)
+
+            self.sidebarPaginationFrame = pf
+        end
+        self.sidebarPaginationFrame:SetPoint("TOPLEFT", 0, -finalY)
+        self.sidebarPaginationFrame:Show()
+        finalY = finalY + 50
+    end
+
+    sc:SetHeight(math.max(1, finalY))
 end
 
 -- =========================================================
