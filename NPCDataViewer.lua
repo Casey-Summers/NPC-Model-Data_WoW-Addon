@@ -211,7 +211,7 @@ function ModelViewer:Ensure()
     typeArrow:SetSize(12, 12)
     typeArrow:SetPoint("RIGHT", -8, 0)
     typeArrow:SetAtlas("Azerite-PointingArrow")
-    typeArrow:SetRotation(-math.pi / 2) -- Point down
+    typeArrow:SetRotation(math.pi) -- Point down (Default UP)
     typeBtn.arrow = typeArrow
 
     local typeMenu = CreateFrame("Frame", nil, typeBtn, "BackdropTemplate")
@@ -347,12 +347,19 @@ function ModelViewer:Ensure()
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
 
-    -- Controls Instruction (Bottom Left)
-    local controlsHint = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    controlsHint:SetPoint("BOTTOMLEFT", 10, 10)
-    controlsHint:SetText("L-Click: Rotate | R-Click: Pan | Scroll: Zoom")
-    controlsHint:SetTextColor(0.6, 0.6, 0.6)
-    controlsHint:SetAlpha(0.7)
+    -- Controls Instruction (Bottom Left - Stacked)
+    local function CreateHint(text, yOff)
+        local hint = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("BOTTOMLEFT", 12, 10 + yOff)
+        hint:SetText(text)
+        hint:SetTextColor(0.6, 0.6, 0.6)
+        hint:SetAlpha(0.6)
+        return hint
+    end
+
+    CreateHint("Scroll: Zoom", 0)
+    CreateHint("R-Click: Pan", 14)
+    CreateHint("L-Click: Rotate", 28)
 
     -- Global Nav internal to model area (On TOP)
     local gPrev = CreateAtlasButton(modelContainer, "shop-header-arrow-disabled", 0, false)
@@ -523,37 +530,37 @@ function ModelViewer:Ensure()
     end
 
     -- Auto-Rotation Toggle (Bottom Right)
-    local autoRotateBtn = CreateControlButton(modelContainer, nil, "Toggle Auto-Rotation", 26)
+    local autoRotateBtn = CreateControlButton(modelContainer, nil, "Toggle Auto-Rotation", 32)
     autoRotateBtn:SetPoint("BOTTOMRIGHT", -8, 8)
     autoRotateBtn:SetFrameLevel(model:GetFrameLevel() + 10)
     autoRotateBtn.label:SetText("AUTO")
-    autoRotateBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
+    autoRotateBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
 
     -- Rotation Axis Toggle (Near Auto Button)
-    local axisToggleBtn = CreateControlButton(modelContainer, nil, "Toggle X/XY Rotation", 26)
+    local axisToggleBtn = CreateControlButton(modelContainer, nil, "Toggle 1D/2D Rotation", 32)
     axisToggleBtn:SetPoint("RIGHT", autoRotateBtn, "LEFT", -4, 0)
     axisToggleBtn:SetFrameLevel(model:GetFrameLevel() + 10)
-    axisToggleBtn.label:SetText("X/Y")
-    axisToggleBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
+    axisToggleBtn.label:SetText("1D")
+    axisToggleBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
 
     local function UpdateToggleVisual()
         local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
         if settings and settings.autoRotate then
-            autoRotateBtn:SetBackdropBorderColor(0, 1, 0, 1)
-            autoRotateBtn.label:SetTextColor(0, 1, 0)
+            autoRotateBtn:SetBackdropBorderColor(1, 0.82, 0, 1) -- Gold
+            autoRotateBtn.label:SetTextColor(1, 0.82, 0)
         else
             autoRotateBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
-            autoRotateBtn.label:SetTextColor(0.6, 0.6, 0.6)
+            autoRotateBtn.label:SetTextColor(0.6, 0.6, 0.6) -- Gray
         end
 
         if ModelViewer.rotateXY then
-            axisToggleBtn:SetBackdropBorderColor(0, 1, 1, 1)
-            axisToggleBtn.label:SetTextColor(0, 1, 1)
-            axisToggleBtn.label:SetText("XY")
+            axisToggleBtn:SetBackdropBorderColor(1, 0.82, 0, 1) -- Gold
+            axisToggleBtn.label:SetTextColor(1, 0.82, 0)
+            axisToggleBtn.label:SetText("2D")
         else
             axisToggleBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
-            axisToggleBtn.label:SetTextColor(0.6, 0.6, 0.6)
-            axisToggleBtn.label:SetText("X")
+            axisToggleBtn.label:SetTextColor(0.6, 0.6, 0.6) -- Gray
+            axisToggleBtn.label:SetText("1D")
         end
     end
 
@@ -658,8 +665,12 @@ function ModelViewer:Ensure()
     infoBox:SetBackdropColor(1, 1, 1, 0.02)
 
     -- 1. Name and Extra Info
-    local nameLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    nameLabel:SetPoint("TOP", infoBox, "TOP", 0, -12)
+    local nameContainer = CreateFrame("Frame", nil, infoBox)
+    nameContainer:SetSize(UI_WIDTH, 30)
+    nameContainer:SetPoint("TOP", 0, -10)
+
+    local nameLabel = nameContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    nameLabel:SetPoint("CENTER", 0, 0)
     nameLabel:SetFont("Fonts\\FRIZQT__.TTF", 20, "OUTLINE") -- Larger Name
     nameLabel:SetWidth(450)                                 -- Max width crop
     nameLabel:SetMaxLines(1)
@@ -667,10 +678,59 @@ function ModelViewer:Ensure()
     nameLabel:SetText("-")
     self.nameLabel = nameLabel
 
+    -- Wowhead Link Icon
+    local whLink = CreateFrame("Button", nil, nameContainer)
+    whLink:SetSize(16, 16)
+    whLink:SetPoint("LEFT", nameLabel, "RIGHT", 8, 0)
+    local whTex = whLink:CreateTexture(nil, "ARTWORK")
+    whTex:SetAllPoints()
+    whTex:SetAtlas("socialqueuing-icon-group") -- Group icon as link placeholder or any atlas
+    whTex:SetVertexColor(0.5, 0.8, 1)          -- Blue-ish
+    whLink:SetNormalTexture(whTex)
+
+    whLink:SetScript("OnClick", function()
+        local nid = self.lastNpcId
+        if nid and nid ~= "-" then
+            local url = "https://www.wowhead.com/npc=" .. nid
+            StaticPopup_Show("URL_COPY_POPUP", url, nil, url)
+        end
+    end)
+    whLink:SetScript("OnEnter", function() whTex:SetVertexColor(1, 1, 1) end)
+    whLink:SetScript("OnLeave", function() whTex:SetVertexColor(0.5, 0.8, 1) end)
+    self.whLink = whLink
+
+    -- Register popup for copy
+    if not StaticPopupDialogs["URL_COPY_POPUP"] then
+        StaticPopupDialogs["URL_COPY_POPUP"] = {
+            text = "Copy link to clipboard (Ctrl+C):",
+            button1 = "Close",
+            OnAccept = function() end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+            preferredIndex = 3,
+            hasEditBox = true,
+            OnShow = function(s, url)
+                local editBox = _G[s:GetName() .. "EditBox"]
+                if editBox then
+                    editBox:SetText(url)
+                    editBox:HighlightText()
+                end
+            end
+        }
+    end
+
     local extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     extraInfo:SetPoint("TOP", nameLabel, "BOTTOM", 0, -2)
     extraInfo:SetTextColor(0.5, 0.8, 1)
     self.extraInfo = extraInfo
+
+    -- Instructions (Top Left)
+    local infoHint = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    infoHint:SetPoint("TOPLEFT", 12, -12)
+    infoHint:SetText("L-Click: Filter | R-Click: Copy")
+    infoHint:SetTextColor(0.5, 0.5, 0.5)
+    infoHint:SetAlpha(0.8)
 
     -- 2. Left Column (Biometrics)
     local leftCol = CreateFrame("Frame", nil, infoBox)
@@ -678,15 +738,23 @@ function ModelViewer:Ensure()
     leftCol:SetPoint("TOPLEFT", 10, -55)
 
     local function CreateSpecLabel(parent, labelText, yOff, category)
-        local btn = CreateFrame("Button", nil, parent)
+        local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
         btn:SetSize(parent:GetWidth(), 38)
         btn:SetPoint("TOP", 0, yOff)
+        btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+        -- Gold border on hover
+        btn:SetBackdrop({
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        btn:SetBackdropBorderColor(1, 0.82, 0, 0) -- Hidden by default
 
         local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         lbl:SetSize(parent:GetWidth(), 12)
         lbl:SetPoint("TOP", 0, 0)
         lbl:SetText(labelText:upper())
-        lbl:SetTextColor(1, 0.82, 0) -- Gold
+        lbl:SetTextColor(1, 0.82, 0) -- Always Gold
         btn.lbl = lbl
 
         local val = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -696,24 +764,33 @@ function ModelViewer:Ensure()
         val:SetHeight(26)
         val:SetText("-")
         val:SetFont("Fonts\\FRIZQT__.TTF", UI_DETAIL_TEXT_SIZE, "")
-        val:SetWordWrap(true)
-        val:SetMaxLines(2)
+        val:SetWordWrap(false)
+        val:SetMaxLines(1)
         val:SetJustifyH("CENTER")
         val:SetJustifyV("TOP")
+        -- "Never past left side" logic via anchoring + clip
+        -- If text is too long, centering it would hide the start.
+        -- We'll adjust based on text length in UpdateDetails if needed,
+        -- but default CENTER usually handles short text well.
+        -- To ensure start is readable, we can use LEFT justification if width exceeds container.
 
-        if category then
-            btn:SetScript("OnClick", function()
-                self:ShowMiniSearch(category, btn)
-            end)
-            btn:SetScript("OnEnter", function()
-                lbl:SetTextColor(1, 1, 1)
-                val:SetTextColor(1, 0.82, 0)
-            end)
-            btn:SetScript("OnLeave", function()
-                lbl:SetTextColor(1, 0.82, 0)
-                val:SetTextColor(1, 1, 1)
-            end)
-        end
+        btn:SetScript("OnClick", function(_, button)
+            if button == "LeftButton" then
+                if category then self:ShowMiniSearch(category, btn) end
+            elseif button == "RightButton" then
+                local txt = val:GetText()
+                if txt and txt ~= "-" then
+                    StaticPopup_Show("URL_COPY_POPUP", txt, nil, txt)
+                end
+            end
+        end)
+
+        btn:SetScript("OnEnter", function()
+            btn:SetBackdropBorderColor(1, 0.82, 0, 0.6)
+        end)
+        btn:SetScript("OnLeave", function()
+            btn:SetBackdropBorderColor(1, 0.82, 0, 0)
+        end)
 
         return val
     end
@@ -735,6 +812,7 @@ function ModelViewer:Ensure()
         instance       = "inst",
         patch          = "patch",
         family         = "fams",
+        significance   = "class", -- Significance maps to classification
         classification = "class"
     }
     self.CATEGORY_MAP = CATEGORY_MAP
@@ -759,39 +837,59 @@ function ModelViewer:Ensure()
     lateralTitle:SetText("FILTERED NPCS")
     lateralTitle:SetTextColor(0.8, 0.6, 0)
 
-    -- Filter labels section
-    local filterStatus = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
-    filterStatus:SetSize(210, 65)
-    filterStatus:SetPoint("TOP", 0, -35)
-    filterStatus:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1
-    })
-    filterStatus:SetBackdropColor(1, 1, 1, 0.03)
-    filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1)
-    self.filterStatus = filterStatus
+    -- Filter grid section (Replaces filterStatus)
+    local filterGrid = CreateFrame("Frame", nil, sidebar)
+    filterGrid:SetSize(210, 110)
+    filterGrid:SetPoint("TOP", 0, -35)
+    self.filterGrid = filterGrid
 
-    local fsText = filterStatus:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    fsText:SetPoint("TOPLEFT", 8, -8)
-    fsText:SetJustifyH("LEFT")
-    fsText:SetText("Active Filters:")
-    self.filterStatusText = fsText
+    local categories = { "type", "family", "zone", "instance", "patch", "significance" }
+    local filterButtons = {}
 
-    -- Allow clicking status box to clear or change
-    filterStatus:SetScript("OnClick", function()
-        self.filters = {}
-        self:UpdateSidebar(true)
-        NPCDV_Print("All filters cleared.")
-    end)
-    filterStatus:SetScript("OnEnter", function()
-        filterStatus:SetBackdropBorderColor(0.8, 0.6, 0, 0.5)
-        filterStatus:SetBackdropColor(1, 1, 1, 0.08)
-    end)
-    filterStatus:SetScript("OnLeave", function()
-        filterStatus:SetBackdropBorderColor(1, 1, 1, 0.1)
-        filterStatus:SetBackdropColor(1, 1, 1, 0.03)
-    end)
+    for i, cat in ipairs(categories) do
+        local fbtn = CreateFrame("Button", nil, filterGrid, "BackdropTemplate")
+        fbtn:SetSize(100, 32)
+        local row = math.floor((i - 1) / 2)
+        local col = (i - 1) % 2
+        fbtn:SetPoint("TOPLEFT", col * 105, -row * 36)
+        fbtn:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        fbtn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+        fbtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+        local title = fbtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOP", 0, -4)
+        title:SetText(cat:upper())
+        title:SetTextColor(0.5, 0.5, 0.5)
+
+        local val = fbtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        val:SetPoint("BOTTOM", 0, 4)
+        val:SetText("Any")
+        val:SetWidth(90)
+        val:SetMaxLines(1)
+        val:SetWordWrap(false)
+        fbtn.val = val
+
+        fbtn:SetScript("OnClick", function()
+            self:ShowMiniSearch(cat, fbtn)
+        end)
+        fbtn:SetScript("OnEnter", function()
+            fbtn:SetBackdropBorderColor(1, 0.82, 0, 0.5)
+            fbtn:SetBackdropColor(0.2, 0.2, 0.2, 1)
+        end)
+        fbtn:SetScript("OnLeave", function()
+            fbtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+            fbtn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+        end)
+
+        filterButtons[cat] = fbtn
+    end
+    self.sidebarFilterButtons = filterButtons
+
+    -- (filterStatus removed and replaced by filterGrid)
 
     local clearFilters = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
     clearFilters:SetSize(80, 16)
@@ -807,7 +905,7 @@ function ModelViewer:Ensure()
     clearFilters:SetScript("OnLeave", function() clearTxt:SetTextColor(0.4, 0.4, 0.4) end)
 
     local scrollFrame = CreateFrame("ScrollFrame", "NPCDV_SidebarScroll", sidebar, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 5, -105)
+    scrollFrame:SetPoint("TOPLEFT", 5, -150)
     scrollFrame:SetPoint("BOTTOMRIGHT", -25, 5)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -951,16 +1049,17 @@ function ModelViewer:SyncState()
     self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
     self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
 
-    -- Unique Display ID logic for current NPC
+    -- Unique Display ID logic for ALL NPC IDs of this name
     local uniqueDispIds = {}
     local currentDispIdx = 0
-    if npcId ~= "-" then
+    if name ~= "-" then
         local seenDisp = {}
-        local variants = npcToVariants[npcId] or {}
-        for _, var in ipairs(variants) do
-            if not seenDisp[var.displayId] then
-                table.insert(uniqueDispIds, var.displayId)
-                seenDisp[var.displayId] = true
+        if self._curResults then
+            for _, var in ipairs(self._curResults) do
+                if not seenDisp[var.displayId] then
+                    table.insert(uniqueDispIds, var.displayId)
+                    seenDisp[var.displayId] = true
+                end
             end
         end
         for i, did in ipairs(uniqueDispIds) do
@@ -1155,22 +1254,16 @@ function ModelViewer:NextDisp()
     if not self._curResults or #self._curResults <= 1 then return end
 
     local currentVar = self._curResults[self._curResultIdx]
-    local currentNpcId = currentVar.npcId
     local currentDispId = currentVar.displayId
 
-    -- Find the next UNIQUE display ID for the same NPC
+    -- Find the next UNIQUE display ID for this NAME (across all NPC IDs)
     local found = false
     for i = 1, #self._curResults do
         local idx = (self._curResultIdx + i - 1) % #self._curResults + 1
         local var = self._curResults[idx]
-        if var.npcId == currentNpcId then
-            if var.displayId ~= currentDispId then
-                self._curResultIdx = idx
-                found = true
-                break
-            end
-        else
-            -- We moved to a different NPC, loop back to the first unique display ID of CURRENT NPC
+        if var.displayId ~= currentDispId then
+            self._curResultIdx = idx
+            found = true
             break
         end
     end
@@ -1180,7 +1273,7 @@ function ModelViewer:NextDisp()
     if not found then
         -- Find first instance of this NPC's first unique display ID
         for i, var in ipairs(self._curResults) do
-            if var.npcId == currentNpcId then
+            if var.displayId == currentDispId then -- Changed from var.npcId == currentNpcId
                 self._curResultIdx = i
                 break
             end
@@ -1194,31 +1287,23 @@ function ModelViewer:PrevDisp()
     if not self._curResults or #self._curResults <= 1 then return end
 
     local currentVar = self._curResults[self._curResultIdx]
-    local currentNpcId = currentVar.npcId
     local currentDispId = currentVar.displayId
 
-    -- Find the previous UNIQUE display ID for the same NPC
+    -- Find the previous UNIQUE display ID for this NAME
     local found = false
     for i = 1, #self._curResults do
         local idx = (self._curResultIdx - i - 1 + #self._curResults) % #self._curResults + 1
         local var = self._curResults[idx]
-        if var.npcId == currentNpcId then
-            if var.displayId ~= currentDispId then
-                -- We found A different display ID, but we want the FIRST instance of THIS display ID
-                local firstIdx = idx
-                for j = 1, #self._curResults do
-                    local innerIdx = (idx - j + #self._curResults) % #self._curResults + 1
-                    if self._curResults[innerIdx].npcId == currentNpcId and self._curResults[innerIdx].displayId == var.displayId then
-                        firstIdx = innerIdx
-                    else
-                        break
-                    end
+        if var.displayId ~= currentDispId then
+            -- Find the FIRST instance of THIS display ID in the list to be consistent
+            local targetDisp = var.displayId
+            for j, v in ipairs(self._curResults) do
+                if v.displayId == targetDisp then
+                    self._curResultIdx = j
+                    break
                 end
-                self._curResultIdx = firstIdx
-                found = true
-                break
             end
-        else
+            found = true
             break
         end
     end
@@ -1229,20 +1314,18 @@ function ModelViewer:PrevDisp()
         local lastDispId = nil
         for i = #self._curResults, 1, -1 do
             local var = self._curResults[i]
-            if var.npcId == currentNpcId then
-                if not lastDispId or var.displayId ~= lastDispId then
-                    -- Find the FIRST instance of the last unique display ID
-                    local firstInst = i
-                    for j = i, 1, -1 do
-                        if self._curResults[j].npcId == currentNpcId and self._curResults[j].displayId == var.displayId then
-                            firstInst = j
-                        else
-                            break
-                        end
+            if not lastDispId or var.displayId ~= lastDispId then
+                -- Find the FIRST instance of the last unique display ID
+                local firstInst = i
+                for j = i, 1, -1 do
+                    if self._curResults[j].displayId == var.displayId then -- Changed from var.npcId == currentNpcId and
+                        firstInst = j
+                    else
+                        break
                     end
-                    lastUniqueIdx = firstInst
-                    break
                 end
+                lastUniqueIdx = firstInst
+                break
             end
         end
         self._curResultIdx = lastUniqueIdx
@@ -1254,6 +1337,7 @@ end
 function ModelViewer:Show()
     self:Ensure()
     self.frame:Show()
+    self:UpdateSidebar(true) -- Show sidebar by default to allow filtering
 end
 
 function ModelViewer:Hide()
@@ -1272,12 +1356,22 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
     if not self.frame then return end
     self.nameLabel:SetText(name or "-")
 
+    local function SafeSetDetail(fs, txt)
+        fs:SetText(txt or "-")
+        fs:SetJustifyH("CENTER")
+        local width = fs:GetStringWidth()
+        local parentWidth = fs:GetParent():GetWidth() - 10
+        if width > parentWidth then
+            fs:SetJustifyH("LEFT")
+        end
+    end
+
     local function SetIdText(label, id)
         if id == "NoData" then
             label:SetText("N/A")
             label:SetTextColor(1, 0.2, 0.2)
         else
-            label:SetText(tostring(id or "-"))
+            label:SetText(id or "-")
             label:SetTextColor(1, 0.8, 0)
         end
     end
@@ -1285,15 +1379,15 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
     SetIdText(self.npcIdLabel, npcId)
     SetIdText(self.displayIdLabel, displayId)
 
-    self.lastNpcId = tonumber(npcId) or npcId
-    self.lastDisplayId = tonumber(displayId) or displayId
+    self.lastNpcId = npcId ~= "-" and npcId or nil
+    self.lastDisplayId = displayId ~= "-" and displayId or nil
 
-    self.zoneLabel:SetText(zone or "Unknown")
+    SafeSetDetail(self.zoneLabel, zone or "Unknown")
     local typeFamily = (ntype or "Unknown")
     if family and family ~= "Unknown" then
         typeFamily = typeFamily .. " / " .. family
     end
-    self.typeLabel:SetText(typeFamily or "Unknown")
+    SafeSetDetail(self.typeLabel, typeFamily or "Unknown")
 
     local location = "Open World"
     if encounter then
@@ -1302,19 +1396,28 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
             location = instance .. " (" .. encounter .. ")"
         end
     end
-    self.locLabel:SetText(location)
+    SafeSetDetail(self.locLabel, location)
 
-    self.patchLabel:SetText(patch or "Unknown")
+    SafeSetDetail(self.patchLabel, patch or "Unknown")
 
     local extra = ""
     if classification and classification ~= "Normal" then
         extra = classification
     end
-    if tameable == "true" then
+    if tameable == "true" or tameable == true then
         if extra ~= "" then extra = extra .. " | " end
         extra = extra .. "Tameable"
     end
     self.extraInfo:SetText(extra)
+
+    -- Update Wowhead link visibility
+    if self.whLink then
+        if npcId and npcId ~= "-" then
+            self.whLink:Show()
+        else
+            self.whLink:Hide()
+        end
+    end
 end
 
 -- =========================================================
@@ -1742,7 +1845,7 @@ function ModelViewer:ShowMiniSearch(category, anchor)
 
     self.miniSearch.category = category
     self.miniSearch:ClearAllPoints()
-    self.miniSearch:SetPoint("BOTTOM", anchor, "TOP", 0, 5)
+    self.miniSearch:SetPoint("TOP", anchor, "BOTTOM", 0, -5)
     self.miniSearch.input:SetText("")
     self.miniSearch.input:SetFocus()
     self.miniSearch:Show()
@@ -1761,8 +1864,10 @@ function ModelViewer:UpdateMiniSearch(category, text)
     -- Cascading logic: find IDs that are actually present given other active filters
     local eligibleIds = self:GetEligibleIds(category)
 
-    local idx = NPCDataViewer_Indexes and
-        NPCDataViewer_Indexes[category == "instance" and "instance" or (category == "zone" and "zone" or category)]
+    local indexKey = category == "instance" and "instance" or
+        (category == "zone" and "zone" or (category == "significance" and "classification" or category))
+    local idx = NPCDataViewer_Indexes and NPCDataViewer_Indexes[indexKey]
+
     if type(idx) == "table" then
         for id, label in pairs(idx) do
             if ToLowerSafe(label):find(q, 1, true) then
@@ -1771,6 +1876,11 @@ function ModelViewer:UpdateMiniSearch(category, text)
                 end
             end
         end
+    end
+
+    -- Special case for Significance: Add Tameable if matching and data exists
+    if category == "significance" and ToLowerSafe("Tameable"):find(q, 1, true) then
+        matches[#matches + 1] = { id = "TAMEABLE", label = "Tameable Only" }
     end
     table.sort(matches, function(a, b) return a.label < b.label end)
 
@@ -1818,88 +1928,62 @@ end
 
 function ModelViewer:CheckFilters(data, ignoreCategory)
     local filters = self.filters
-    if type(filters) ~= "table" then
-        return true
-    end
+    if not filters or not next(filters) then return true end
 
     local activeFilters = {}
     for cat, val in pairs(filters) do
-        if cat ~= ignoreCategory then
-            activeFilters[cat] = val
-        end
+        if cat ~= ignoreCategory then activeFilters[cat] = val end
     end
     if not next(activeFilters) then return true end
 
     local possibleNpcIds = {}
-
-    -- Prefer explicit ids list when present, otherwise derive from category buckets
-    if type(data.ids) == "table" then
-        for npcId in pairs(data.ids) do
-            possibleNpcIds[tonumber(npcId) or npcId] = true
-        end
+    if data.ids then
+        for npcId in pairs(data.ids) do possibleNpcIds[tonumber(npcId) or npcId] = true end
     else
-        -- Derive possible NPC IDs from any available category mapping buckets
+        -- Derive possible IDs from CATEGORY_MAP fields if data.ids is missing
         for cat, field in pairs(self.CATEGORY_MAP) do
-            local fieldData = data[field]
-            if type(fieldData) == "table" then
-                if field == "inst" then
-                    -- inst maps instanceId -> encounterId(s)
-                    local encData = data["enc"]
-                    if type(encData) == "table" then
-                        for _, eids in pairs(fieldData) do
-                            local elist = type(eids) == "table" and eids or { eids }
-                            for _, eid in ipairs(elist) do
-                                local nids = encData[eid]
-                                if nids then
-                                    local nlist = type(nids) == "table" and nids or { nids }
-                                    for _, nid in ipairs(nlist) do
-                                        possibleNpcIds[tonumber(nid) or nid] = true
-                                    end
-                                end
-                            end
-                        end
-                    end
-                else
-                    for _, nids in pairs(fieldData) do
-                        local nlist = type(nids) == "table" and nids or { nids }
-                        for _, nid in ipairs(nlist) do
-                            possibleNpcIds[tonumber(nid) or nid] = true
-                        end
-                    end
+            if data[field] then
+                for _, nids in pairs(data[field]) do
+                    local nlist = type(nids) == "table" and nids or { nids }
+                    for _, nid in ipairs(nlist) do possibleNpcIds[tonumber(nid) or nid] = true end
                 end
             end
-        end
-
-        -- If we still have no base IDs, this record can't satisfy active filters
-        if not next(possibleNpcIds) then
-            return false
         end
     end
 
-    for cat, filterId in pairs(activeFilters) do
-        local field = self.CATEGORY_MAP[cat]
-        local fieldData = data[field]
-        if not fieldData then return false end
+    if not next(possibleNpcIds) then return false end
 
+    for cat, filterId in pairs(activeFilters) do
         local validNpcIds = {}
-        if cat == "instance" then
-            local encounters = fieldData[filterId]
-            if not encounters then return false end
-            local encData = data["enc"]
-            if not encData then return false end
-            local elist = type(encounters) == "table" and encounters or { encounters }
-            for _, eid in ipairs(elist) do
-                local nids = encData[eid]
-                if nids then
-                    local nlist = type(nids) == "table" and nids or { nids }
-                    for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
-                end
+        if cat == "significance" and filterId == "TAMEABLE" then
+            if not data.tame then return false end
+            for _, nids in pairs(data.tame) do
+                local nlist = type(nids) == "table" and nids or { nids }
+                for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
             end
         else
+            local field = self.CATEGORY_MAP[cat]
+            local fieldData = data[field]
+            if not fieldData then return false end
             local nids = fieldData[filterId]
             if not nids then return false end
-            local nlist = type(nids) == "table" and nids or { nids }
-            for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
+
+            if cat == "instance" then
+                -- inst maps instanceId -> encounterId(s)
+                local encData = data["enc"]
+                if not encData then return false end
+                local elist = type(nids) == "table" and nids or { nids }
+                for _, eid in ipairs(elist) do
+                    local list = encData[eid]
+                    if list then
+                        local nlist = type(list) == "table" and list or { list }
+                        for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
+                    end
+                end
+            else
+                local nlist = type(nids) == "table" and nids or { nids }
+                for _, nid in ipairs(nlist) do validNpcIds[tonumber(nid) or nid] = true end
+            end
         end
 
         local anyMatch = false
@@ -1944,26 +2028,29 @@ function ModelViewer:UpdateSidebar(resetLimit)
     local activeStr = ""
     local hasFilters = false
 
-    local idx = NPCDataViewer_Indexes
-    for cat, id in pairs(self.filters) do
-        hasFilters = true
-        local label = "Unknown"
-        if idx then
-            local indexKey = cat == "instance" and "instance" or (cat == "zone" and "zone" or cat)
-            if idx[indexKey] then
-                label = idx[indexKey][id] or tostring(id)
-            end
-        end
-        activeStr = activeStr .. "|cFFFFD100" .. cat:upper() .. ":|r " .. label .. "\n"
-    end
-
-    if not hasFilters then
-        self.sidebar:Hide()
-        return
-    end
-
     self.sidebar:Show()
-    self.filterStatusText:SetText("Active Filters (Click to Clear All):\n" .. activeStr)
+
+    local idx = NPCDataViewer_Indexes
+    for cat, fbtn in pairs(self.sidebarFilterButtons) do
+        local filterId = self.filters[cat]
+        if filterId then
+            local label = "Unknown"
+            if filterId == "TAMEABLE" then
+                label = "Tameable"
+            else
+                local indexKey = cat == "instance" and "instance" or
+                    (cat == "zone" and "zone" or (cat == "significance" and "classification" or cat))
+                if idx and idx[indexKey] then
+                    label = idx[indexKey][filterId] or tostring(filterId)
+                end
+            end
+            fbtn.val:SetText(label)
+            fbtn.val:SetTextColor(1, 0.82, 0)
+        else
+            fbtn.val:SetText("Any")
+            fbtn.val:SetTextColor(0.4, 0.4, 0.4)
+        end
+    end
 
     local seen = {}
     if NPCDataViewer_Data then
