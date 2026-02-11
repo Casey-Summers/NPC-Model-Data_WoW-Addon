@@ -15,6 +15,12 @@ local UI_HEADER_HEIGHT = 34
 local UI_DETAIL_TEXT_SIZE = 12
 local UI_PADDING = 8 -- Spacing between elements
 
+-- Rotation and Translation Speed Constants
+local ROTATION_SPEED_X = 0.01
+local ROTATION_SPEED_Y = 0.01
+local TRANSLATION_SPEED = 0.001
+local ZOOM_SPEED = 0.1
+
 -- =========================================================
 -- Small utils
 -- =========================================================
@@ -123,10 +129,11 @@ function ModelViewer:Ensure()
     header:SetPoint("TOPLEFT", 1, -1)
     header:SetPoint("TOPRIGHT", -1, -1)
     header:SetHeight(34)
-    header:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-    })
-    header:SetBackdropColor(1, 1, 1, 0.05)
+
+    local headerBg = header:CreateTexture(nil, "BACKGROUND")
+    headerBg:SetAllPoints()
+    headerBg:SetAtlas("UI-Achievement-Border-2")
+    headerBg:SetAlpha(0.8)
 
     local title = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
     title:SetPoint("CENTER", 0, 0)
@@ -196,9 +203,16 @@ function ModelViewer:Ensure()
     end
 
     -- Search Type Dropdown
-    local typeBtn = CreateModernButton(searchGroup, "Name ▼", 100)
+    local typeBtn = CreateModernButton(searchGroup, "Name", 100)
     typeBtn:SetPoint("LEFT", 0, 0)
     typeBtn:SetHeight(UI_SEARCH_HEIGHT)
+
+    local typeArrow = typeBtn:CreateTexture(nil, "OVERLAY")
+    typeArrow:SetSize(12, 12)
+    typeArrow:SetPoint("RIGHT", -8, 0)
+    typeArrow:SetAtlas("Azerite-PointingArrow")
+    typeArrow:SetRotation(-math.pi / 2) -- Point down
+    typeBtn.arrow = typeArrow
 
     local typeMenu = CreateFrame("Frame", nil, typeBtn, "BackdropTemplate")
     typeMenu:SetSize(100, 75)
@@ -222,7 +236,7 @@ function ModelViewer:Ensure()
         lbl:SetText(text)
         btn:SetScript("OnClick", function()
             ModelViewer.searchType = text
-            typeBtn.label:SetText(text .. " ▼")
+            typeBtn.label:SetText(text)
             typeMenu:Hide()
         end)
         btn:SetScript("OnEnter", function() lbl:SetTextColor(1, 0.82, 0) end)
@@ -333,6 +347,13 @@ function ModelViewer:Ensure()
     local model = CreateFrame("PlayerModel", nil, modelContainer)
     model:SetAllPoints()
 
+    -- Controls Instruction (Bottom Left)
+    local controlsHint = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    controlsHint:SetPoint("BOTTOMLEFT", 10, 10)
+    controlsHint:SetText("L-Click: Rotate | R-Click: Pan | Scroll: Zoom")
+    controlsHint:SetTextColor(0.6, 0.6, 0.6)
+    controlsHint:SetAlpha(0.7)
+
     -- Global Nav internal to model area (On TOP)
     local gPrev = CreateAtlasButton(modelContainer, "shop-header-arrow-disabled", 0, false)
     gPrev:SetPoint("LEFT", 12, 0)
@@ -351,6 +372,7 @@ function ModelViewer:Ensure()
     self.modelDistance = 0 -- Default zoom level (0 = normal view)
     self.isRotating = false
     self.rotationSpeed = 0
+    self.rotateXY = false -- Default to X-axis only
 
     -- Left-click drag to rotate
     model:EnableMouse(true)
@@ -388,16 +410,20 @@ function ModelViewer:Ensure()
             local cursorX, cursorY = GetCursorPosition()
 
             -- Horizontal rotation (Facing)
-            local deltaX = (cursorX - ModelViewer.dragStartX) * 0.01
+            local deltaX = (cursorX - ModelViewer.dragStartX) * ROTATION_SPEED_X
             ModelViewer.modelRotation = (ModelViewer.dragStartRotation + deltaX) % (math.pi * 2)
             self:SetFacing(ModelViewer.modelRotation)
 
             -- Vertical rotation (Pitch)
-            local deltaY = (cursorY - ModelViewer.dragStartY) * 0.01
-            ModelViewer.modelPitch = (ModelViewer.dragStartPitch - deltaY) -- Inverted for natural feel
-            -- Clamping pitch to prevent flipping or extreme angles
-            if ModelViewer.modelPitch > 1.5 then ModelViewer.modelPitch = 1.5 end
-            if ModelViewer.modelPitch < -1.5 then ModelViewer.modelPitch = -1.5 end
+            if ModelViewer.rotateXY then
+                local deltaY = (cursorY - ModelViewer.dragStartY) * ROTATION_SPEED_Y
+                ModelViewer.modelPitch = (ModelViewer.dragStartPitch - deltaY) -- Inverted for natural feel
+                -- Clamping pitch to prevent flipping or extreme angles
+                if ModelViewer.modelPitch > 1.5 then ModelViewer.modelPitch = 1.5 end
+                if ModelViewer.modelPitch < -1.5 then ModelViewer.modelPitch = -1.5 end
+            else
+                ModelViewer.modelPitch = 0
+            end
 
             if self.SetPitch then
                 self:SetPitch(ModelViewer.modelPitch)
@@ -407,25 +433,27 @@ function ModelViewer:Ensure()
         -- Manual translation
         if ModelViewer.isTranslating then
             local cursorX, cursorY = GetCursorPosition()
-            local deltaX = (cursorX - ModelViewer.dragStartX) * 0.001
-            local deltaY = (cursorY - ModelViewer.dragStartY) * 0.001
+            local deltaX = (cursorX - ModelViewer.dragStartX) * TRANSLATION_SPEED
+            local deltaY = (cursorY - ModelViewer.dragStartY) * TRANSLATION_SPEED
             ModelViewer.modelPosition.x = ModelViewer.dragStartPos.x + deltaX
             ModelViewer.modelPosition.y = ModelViewer.dragStartPos.y + deltaY
             self:SetPosition(ModelViewer.modelPosition.z, ModelViewer.modelPosition.x, ModelViewer.modelPosition.y)
         end
     end)
 
-    -- Mouse wheel zoom
+    -- Mouse wheel zoom (Linear path)
     model:EnableMouseWheel(true)
     model:SetScript("OnMouseWheel", function(self, delta)
+        -- Linear zoom using SetPosition instead of SetPortraitZoom
+        -- Positive delta = scroll up = zoom in (z increases towards camera)
+        -- Large scroll-out range, but cannot be negative enough to pass through NPC center
+        -- We'll use modelPosition.z for this
         if delta > 0 then
-            -- Scroll up = zoom in (increase distance for closer view)
-            ModelViewer.modelDistance = math.min(3, ModelViewer.modelDistance + 0.1)
+            ModelViewer.modelPosition.z = math.min(1.5, ModelViewer.modelPosition.z + ZOOM_SPEED)
         else
-            -- Scroll down = zoom out (decrease distance for farther view)
-            ModelViewer.modelDistance = math.max(-1, ModelViewer.modelDistance - 0.1)
+            ModelViewer.modelPosition.z = math.max(-100, ModelViewer.modelPosition.z - ZOOM_SPEED)
         end
-        self:SetPortraitZoom(ModelViewer.modelDistance)
+        self:SetPosition(ModelViewer.modelPosition.z, ModelViewer.modelPosition.x, ModelViewer.modelPosition.y)
     end)
 
     -- Model control buttons grouped and centered
@@ -501,6 +529,13 @@ function ModelViewer:Ensure()
     autoRotateBtn.label:SetText("AUTO")
     autoRotateBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
 
+    -- Rotation Axis Toggle (Near Auto Button)
+    local axisToggleBtn = CreateControlButton(modelContainer, nil, "Toggle X/XY Rotation", 26)
+    axisToggleBtn:SetPoint("RIGHT", autoRotateBtn, "LEFT", -4, 0)
+    axisToggleBtn:SetFrameLevel(model:GetFrameLevel() + 10)
+    axisToggleBtn.label:SetText("X/Y")
+    axisToggleBtn.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
+
     local function UpdateToggleVisual()
         local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
         if settings and settings.autoRotate then
@@ -510,7 +545,22 @@ function ModelViewer:Ensure()
             autoRotateBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
             autoRotateBtn.label:SetTextColor(0.6, 0.6, 0.6)
         end
+
+        if ModelViewer.rotateXY then
+            axisToggleBtn:SetBackdropBorderColor(0, 1, 1, 1)
+            axisToggleBtn.label:SetTextColor(0, 1, 1)
+            axisToggleBtn.label:SetText("XY")
+        else
+            axisToggleBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+            axisToggleBtn.label:SetTextColor(0.6, 0.6, 0.6)
+            axisToggleBtn.label:SetText("X")
+        end
     end
+
+    axisToggleBtn:SetScript("OnClick", function()
+        ModelViewer.rotateXY = not ModelViewer.rotateXY
+        UpdateToggleVisual()
+    end)
 
     autoRotateBtn:SetScript("OnClick", function()
         if NPCDataViewerOptions then
@@ -887,22 +937,11 @@ function ModelViewer:SyncState()
     -- Update Counters
     local npcCount = #uniqueNpcs
     local currentNpcIdx = 0
-    local dispCount = 0
-    local currentDispIdx = 0
 
     if npcId ~= "-" then
         for i, id in ipairs(uniqueNpcs) do
             if id == npcId then
                 currentNpcIdx = i
-                break
-            end
-        end
-
-        local variants = npcToVariants[npcId] or {}
-        dispCount = #variants
-        for i, var in ipairs(variants) do
-            if var.displayId == dispId then
-                currentDispIdx = i
                 break
             end
         end
@@ -912,12 +951,30 @@ function ModelViewer:SyncState()
     self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
     self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
 
-    -- Display ID counter now shows position within ALL variants for this Name
-    local totalVariants = self._curResults and #self._curResults or 0
-    local variantIdx = self._curResultIdx or 0
-    self.dispCounter:SetText(("%d / %d"):format(variantIdx, totalVariants))
-    self.dispPrev:GetNormalTexture():SetDesaturated(totalVariants <= 1)
-    self.dispNext:GetNormalTexture():SetDesaturated(totalVariants <= 1)
+    -- Unique Display ID logic for current NPC
+    local uniqueDispIds = {}
+    local currentDispIdx = 0
+    if npcId ~= "-" then
+        local seenDisp = {}
+        local variants = npcToVariants[npcId] or {}
+        for _, var in ipairs(variants) do
+            if not seenDisp[var.displayId] then
+                table.insert(uniqueDispIds, var.displayId)
+                seenDisp[var.displayId] = true
+            end
+        end
+        for i, did in ipairs(uniqueDispIds) do
+            if did == dispId then
+                currentDispIdx = i
+                break
+            end
+        end
+    end
+
+    local totalDisp = #uniqueDispIds
+    self.dispCounter:SetText(("%d / %d"):format(currentDispIdx, totalDisp))
+    self.dispPrev:GetNormalTexture():SetDesaturated(totalDisp <= 1)
+    self.dispNext:GetNormalTexture():SetDesaturated(totalDisp <= 1)
 
     -- Handle Lack of IDs or Visuals
     local warning = ""
@@ -999,8 +1056,9 @@ function ModelViewer:NextGlobal()
     self:BuildGlobalIdIndexIfNeeded()
     if not self._idIndex or #self._idIndex == 0 then return end
 
+    local currentId = self.lastNpcId
     local nameVariant = self._curResults and self._curResults[self._curResultIdx]
-    local currentId = nameVariant and nameVariant.npcId
+    if nameVariant then currentId = nameVariant.npcId end
 
     local nextId = self._idIndex[1]
     if currentId and type(currentId) == "number" then
@@ -1010,11 +1068,6 @@ function ModelViewer:NextGlobal()
                 self._curGlobalIdx = i
                 break
             end
-        end
-        -- If no id > currentId was found, loop to start
-        if nextId == self._idIndex[1] and currentId >= self._idIndex[#self._idIndex] then
-            nextId = self._idIndex[1]
-            self._curGlobalIdx = 1
         end
     end
 
@@ -1026,8 +1079,9 @@ function ModelViewer:PrevGlobal()
     self:BuildGlobalIdIndexIfNeeded()
     if not self._idIndex or #self._idIndex == 0 then return end
 
+    local currentId = self.lastNpcId
     local nameVariant = self._curResults and self._curResults[self._curResultIdx]
-    local currentId = nameVariant and nameVariant.npcId
+    if nameVariant then currentId = nameVariant.npcId end
 
     local prevId = self._idIndex[#self._idIndex]
     if currentId and type(currentId) == "number" then
@@ -1037,11 +1091,6 @@ function ModelViewer:PrevGlobal()
                 self._curGlobalIdx = i
                 break
             end
-        end
-        -- If no id < currentId was found, loop to end
-        if prevId == self._idIndex[#self._idIndex] and currentId <= self._idIndex[1] then
-            prevId = self._idIndex[#self._idIndex]
-            self._curGlobalIdx = #self._idIndex
         end
     end
 
@@ -1104,14 +1153,101 @@ end
 
 function ModelViewer:NextDisp()
     if not self._curResults or #self._curResults <= 1 then return end
-    self._curResultIdx = (self._curResultIdx % #self._curResults) + 1
+
+    local currentVar = self._curResults[self._curResultIdx]
+    local currentNpcId = currentVar.npcId
+    local currentDispId = currentVar.displayId
+
+    -- Find the next UNIQUE display ID for the same NPC
+    local found = false
+    for i = 1, #self._curResults do
+        local idx = (self._curResultIdx + i - 1) % #self._curResults + 1
+        local var = self._curResults[idx]
+        if var.npcId == currentNpcId then
+            if var.displayId ~= currentDispId then
+                self._curResultIdx = idx
+                found = true
+                break
+            end
+        else
+            -- We moved to a different NPC, loop back to the first unique display ID of CURRENT NPC
+            break
+        end
+    end
+
+    -- If no different display ID found for THIS npc, we wrap or stay
+    -- But since we want to iterate UNIQUE display IDs for THIS NPC only:
+    if not found then
+        -- Find first instance of this NPC's first unique display ID
+        for i, var in ipairs(self._curResults) do
+            if var.npcId == currentNpcId then
+                self._curResultIdx = i
+                break
+            end
+        end
+    end
+
     self:SyncState()
 end
 
 function ModelViewer:PrevDisp()
     if not self._curResults or #self._curResults <= 1 then return end
-    self._curResultIdx = self._curResultIdx - 1
-    if self._curResultIdx < 1 then self._curResultIdx = #self._curResults end
+
+    local currentVar = self._curResults[self._curResultIdx]
+    local currentNpcId = currentVar.npcId
+    local currentDispId = currentVar.displayId
+
+    -- Find the previous UNIQUE display ID for the same NPC
+    local found = false
+    for i = 1, #self._curResults do
+        local idx = (self._curResultIdx - i - 1 + #self._curResults) % #self._curResults + 1
+        local var = self._curResults[idx]
+        if var.npcId == currentNpcId then
+            if var.displayId ~= currentDispId then
+                -- We found A different display ID, but we want the FIRST instance of THIS display ID
+                local firstIdx = idx
+                for j = 1, #self._curResults do
+                    local innerIdx = (idx - j + #self._curResults) % #self._curResults + 1
+                    if self._curResults[innerIdx].npcId == currentNpcId and self._curResults[innerIdx].displayId == var.displayId then
+                        firstIdx = innerIdx
+                    else
+                        break
+                    end
+                end
+                self._curResultIdx = firstIdx
+                found = true
+                break
+            end
+        else
+            break
+        end
+    end
+
+    -- If not found, wrap to LAST unique display ID of this NPC
+    if not found then
+        local lastUniqueIdx = self._curResultIdx
+        local lastDispId = nil
+        for i = #self._curResults, 1, -1 do
+            local var = self._curResults[i]
+            if var.npcId == currentNpcId then
+                if not lastDispId or var.displayId ~= lastDispId then
+                    -- Find the FIRST instance of the last unique display ID
+                    local firstInst = i
+                    for j = i, 1, -1 do
+                        if self._curResults[j].npcId == currentNpcId and self._curResults[j].displayId == var.displayId then
+                            firstInst = j
+                        else
+                            break
+                        end
+                    end
+                    lastUniqueIdx = firstInst
+                    break
+                end
+            end
+        end
+        self._curResultIdx = lastUniqueIdx
+    end
+
     self:SyncState()
 end
 
@@ -1148,6 +1284,9 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
 
     SetIdText(self.npcIdLabel, npcId)
     SetIdText(self.displayIdLabel, displayId)
+
+    self.lastNpcId = tonumber(npcId) or npcId
+    self.lastDisplayId = tonumber(displayId) or displayId
 
     self.zoneLabel:SetText(zone or "Unknown")
     local typeFamily = (ntype or "Unknown")
@@ -1412,7 +1551,7 @@ function ModelViewer:ApplyInput()
     local raw = Trim(self.input:GetText())
     if raw == "" then return end
 
-    local results = NPCDataViewerAPI:Search(raw, self.searchType)
+    local results = NPCDataViewerAPI:Search(raw, "Name")
     if results then
         self._curResults = results
         self._curResultIdx = 1
