@@ -16,10 +16,10 @@ local UI_DETAIL_TEXT_SIZE = 12
 local UI_PADDING = 8 -- Spacing between elements
 
 -- Rotation and Translation Speed Constants
-local ROTATION_SPEED_X = 0.01
-local ROTATION_SPEED_Y = 0.01
-local TRANSLATION_SPEED = 0.001
-local ZOOM_SPEED = 0.1
+local ROTATION_SPEED_X = 0.05
+local ROTATION_SPEED_Y = 0.05
+local TRANSLATION_SPEED = 0.025
+local ZOOM_SPEED = 0.5
 
 -- =========================================================
 -- Small utils
@@ -545,6 +545,8 @@ function ModelViewer:Ensure()
 
     local function UpdateToggleVisual()
         local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
+
+        -- Auto button should reflect settings.autoRotate ONLY
         if settings and settings.autoRotate then
             autoRotateBtn:SetBackdropBorderColor(1, 0.82, 0, 1) -- Gold
             autoRotateBtn.label:SetTextColor(1, 0.82, 0)
@@ -553,6 +555,7 @@ function ModelViewer:Ensure()
             autoRotateBtn.label:SetTextColor(0.6, 0.6, 0.6) -- Gray
         end
 
+        -- 2D button should reflect ModelViewer.rotateXY ONLY
         if ModelViewer.rotateXY then
             axisToggleBtn:SetBackdropBorderColor(1, 0.82, 0, 1) -- Gold
             axisToggleBtn.label:SetTextColor(1, 0.82, 0)
@@ -664,28 +667,44 @@ function ModelViewer:Ensure()
     })
     infoBox:SetBackdropColor(1, 1, 1, 0.02)
 
-    -- 1. Name and Extra Info
+    -- 1. Name and Extra Info (Refined for spacing)
     local nameContainer = CreateFrame("Frame", nil, infoBox)
     nameContainer:SetSize(UI_WIDTH, 30)
     nameContainer:SetPoint("TOP", 0, -10)
 
     local nameLabel = nameContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     nameLabel:SetPoint("CENTER", 0, 0)
-    nameLabel:SetFont("Fonts\\FRIZQT__.TTF", 20, "OUTLINE") -- Larger Name
-    nameLabel:SetWidth(450)                                 -- Max width crop
+    nameLabel:SetFont("Fonts\\FRIZQT__.TTF", 20, "OUTLINE")
+    nameLabel:SetWidth(450)
     nameLabel:SetMaxLines(1)
     nameLabel:SetWordWrap(false)
     nameLabel:SetText("-")
     self.nameLabel = nameLabel
 
-    -- Wowhead Link Icon
-    local whLink = CreateFrame("Button", nil, nameContainer)
+    -- Classifications (Gold, Centered)
+    local extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    extraInfo:SetPoint("TOP", nameLabel, "BOTTOM", 0, -4) -- More padding
+    extraInfo:SetTextColor(1, 0.82, 0)
+    self.extraInfo = extraInfo
+
+    -- WoWHead Link (Gray, Centered)
+    local whLinkGroup = CreateFrame("Frame", nil, infoBox)
+    whLinkGroup:SetSize(300, 20)
+    whLinkGroup:SetPoint("TOP", extraInfo, "BOTTOM", 0, -4) -- More padding
+
+    local whLabel = whLinkGroup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    whLabel:SetText("WoWHead Link:")
+    whLabel:SetTextColor(0.5, 0.5, 0.5)
+    -- Shift label left by half of (icon width + spacing) to center the whole group
+    whLabel:SetPoint("CENTER", -11, 0)
+
+    local whLink = CreateFrame("Button", nil, whLinkGroup)
     whLink:SetSize(16, 16)
-    whLink:SetPoint("LEFT", nameLabel, "RIGHT", 8, 0)
+    whLink:SetPoint("LEFT", whLabel, "RIGHT", 6, 0)
     local whTex = whLink:CreateTexture(nil, "ARTWORK")
     whTex:SetAllPoints()
-    whTex:SetAtlas("socialqueuing-icon-group") -- Group icon as link placeholder or any atlas
-    whTex:SetVertexColor(0.5, 0.8, 1)          -- Blue-ish
+    whTex:SetAtlas("socialqueuing-icon-group")
+    whTex:SetVertexColor(0.5, 0.5, 0.5)
     whLink:SetNormalTexture(whTex)
 
     whLink:SetScript("OnClick", function()
@@ -696,50 +715,30 @@ function ModelViewer:Ensure()
         end
     end)
     whLink:SetScript("OnEnter", function() whTex:SetVertexColor(1, 1, 1) end)
-    whLink:SetScript("OnLeave", function() whTex:SetVertexColor(0.5, 0.8, 1) end)
+    whLink:SetScript("OnLeave", function() whTex:SetVertexColor(0.5, 0.5, 0.5) end)
     self.whLink = whLink
 
-    -- Register popup for copy
-    if not StaticPopupDialogs["URL_COPY_POPUP"] then
-        StaticPopupDialogs["URL_COPY_POPUP"] = {
-            text = "Copy link to clipboard (Ctrl+C):",
-            button1 = "Close",
-            OnAccept = function() end,
-            timeout = 0,
-            whileDead = true,
-            hideOnEscape = true,
-            preferredIndex = 3,
-            hasEditBox = true,
-            OnShow = function(s, url)
-                local editBox = _G[s:GetName() .. "EditBox"]
-                if editBox then
-                    editBox:SetText(url)
-                    editBox:HighlightText()
-                end
-            end
-        }
+    -- Instructions (Top Left - Stacked)
+    local function CreateDetailHint(text, yOff)
+        local hint = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("TOPLEFT", 12, -10 - yOff)
+        hint:SetText(text)
+        hint:SetTextColor(0.5, 0.5, 0.5)
+        hint:SetAlpha(0.6)
+        return hint
     end
 
-    local extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    extraInfo:SetPoint("TOP", nameLabel, "BOTTOM", 0, -2)
-    extraInfo:SetTextColor(0.5, 0.8, 1)
-    self.extraInfo = extraInfo
-
-    -- Instructions (Top Left)
-    local infoHint = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    infoHint:SetPoint("TOPLEFT", 12, -12)
-    infoHint:SetText("L-Click: Filter | R-Click: Copy")
-    infoHint:SetTextColor(0.5, 0.5, 0.5)
-    infoHint:SetAlpha(0.8)
+    CreateDetailHint("L-Click: Filter", 0)
+    CreateDetailHint("R-Click: Copy", 14)
 
     -- 2. Left Column (Biometrics)
     local leftCol = CreateFrame("Frame", nil, infoBox)
-    leftCol:SetSize(200, 100)
-    leftCol:SetPoint("TOPLEFT", 10, -55)
+    leftCol:SetSize(200, 120)
+    leftCol:SetPoint("TOPLEFT", 10, -85) -- Pushed down
 
     local function CreateSpecLabel(parent, labelText, yOff, category)
         local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-        btn:SetSize(parent:GetWidth(), 38)
+        btn:SetSize(parent:GetWidth(), 42) -- Increased height for padding
         btn:SetPoint("TOP", 0, yOff)
         btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
@@ -796,15 +795,15 @@ function ModelViewer:Ensure()
     end
 
     self.typeLabel = CreateSpecLabel(leftCol, "Type / Family", 0, "type")
-    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -45, "zone")
+    self.zoneLabel = CreateSpecLabel(leftCol, "Zone", -46, "zone")
 
     -- 3. Right Column (World/Source)
     local rightCol = CreateFrame("Frame", nil, infoBox)
     rightCol:SetSize(200, 100)
-    rightCol:SetPoint("TOPRIGHT", -10, -55)
+    rightCol:SetPoint("TOPRIGHT", -10, -85) -- Pushed down
 
     self.locLabel = CreateSpecLabel(rightCol, "Location", 0, "instance")
-    self.patchLabel = CreateSpecLabel(rightCol, "Added in Patch", -45, "patch")
+    self.patchLabel = CreateSpecLabel(rightCol, "Patch", -46, "patch")
 
     local CATEGORY_MAP = {
         type           = "types",
@@ -921,7 +920,7 @@ function ModelViewer:Ensure()
     -- 4. ID Navigation Area (Center)
     local navGroup = CreateFrame("Frame", nil, infoBox)
     navGroup:SetSize(240, 100)
-    navGroup:SetPoint("TOP", infoBox, "TOP", 0, -55)
+    navGroup:SetPoint("TOP", infoBox, "TOP", 0, -75) -- Pushed down
 
     local function CreateNavControl(parent, labelText, yOff, onPrev, onNext)
         local cont = CreateFrame("Frame", nil, parent)
@@ -1019,7 +1018,6 @@ function ModelViewer:SyncState()
 
     -- Group variants by NPC ID for hierarchical navigation
     local uniqueNpcs = {}
-    local npcToVariants = {}
     if self._curResults then
         local seenNpc = {}
         for _, res in ipairs(self._curResults) do
@@ -1027,15 +1025,16 @@ function ModelViewer:SyncState()
                 table.insert(uniqueNpcs, res.npcId)
                 seenNpc[res.npcId] = true
             end
-            npcToVariants[res.npcId] = npcToVariants[res.npcId] or {}
-            table.insert(npcToVariants[res.npcId], res)
         end
+        table.sort(uniqueNpcs, function(a, b)
+            return (tonumber(a) or 0) < (tonumber(b) or 0)
+        end)
     end
+    self._curUniqueNpcIds = uniqueNpcs
 
     -- Update Counters
     local npcCount = #uniqueNpcs
     local currentNpcIdx = 0
-
     if npcId ~= "-" then
         for i, id in ipairs(uniqueNpcs) do
             if id == npcId then
@@ -1049,7 +1048,7 @@ function ModelViewer:SyncState()
     self.npcPrev:GetNormalTexture():SetDesaturated(npcCount <= 1)
     self.npcNext:GetNormalTexture():SetDesaturated(npcCount <= 1)
 
-    -- Unique Display ID logic for ALL NPC IDs of this name
+    -- Unique Display ID logic for ALL variants of this name
     local uniqueDispIds = {}
     local currentDispIdx = 0
     if name ~= "-" then
@@ -1062,6 +1061,11 @@ function ModelViewer:SyncState()
                 end
             end
         end
+        table.sort(uniqueDispIds, function(a, b)
+            if a == "NoData" then return false end
+            if b == "NoData" then return true end
+            return (tonumber(a) or 0) < (tonumber(b) or 0)
+        end)
         for i, did in ipairs(uniqueDispIds) do
             if did == dispId then
                 currentDispIdx = i
@@ -1069,6 +1073,7 @@ function ModelViewer:SyncState()
             end
         end
     end
+    self._curUniqueDispIds = uniqueDispIds
 
     local totalDisp = #uniqueDispIds
     self.dispCounter:SetText(("%d / %d"):format(currentDispIdx, totalDisp))
@@ -1198,139 +1203,118 @@ function ModelViewer:PrevGlobal()
 end
 
 function ModelViewer:NextNpc()
-    if not self._curResults or #self._curResults == 0 then return end
+    local ids = self._curUniqueNpcIds or {}
+    local total = #ids
+    if total <= 1 then return end
 
-    local currentNpcId = self._curResults[self._curResultIdx].npcId
-    local nextIdx = self._curResultIdx
+    local currentVar = self._curResults and self._curResults[self._curResultIdx]
+    if not currentVar then return end
 
-    -- Find the next entry with a different NPC ID
-    local found = false
-    for i = 1, #self._curResults do
-        local checkIdx = (self._curResultIdx + i - 1) % #self._curResults + 1
-        if self._curResults[checkIdx].npcId ~= currentNpcId then
-            nextIdx = checkIdx
-            found = true
-            break
+    local currentId = currentVar.npcId
+    local currentIdx = 1
+    for i, id in ipairs(ids) do
+        if id == currentId then
+            currentIdx = i; break
         end
     end
 
-    -- If no different NPC ID found, just stay or treat as infinite loop to same
-    if not found then nextIdx = self._curResultIdx end
+    local nextIdx = (currentIdx % total) + 1
+    local nextId = ids[nextIdx]
 
-    self._curResultIdx = nextIdx
+    -- Find the first result matching this NPC ID
+    for i, res in ipairs(self._curResults) do
+        if res.npcId == nextId then
+            self._curResultIdx = i
+            break
+        end
+    end
     self:SyncState()
 end
 
 function ModelViewer:PrevNpc()
-    if not self._curResults or #self._curResults == 0 then return end
+    local ids = self._curUniqueNpcIds or {}
+    local total = #ids
+    if total <= 1 then return end
 
-    local currentNpcId = self._curResults[self._curResultIdx].npcId
-    local prevIdx = self._curResultIdx
+    local currentVar = self._curResults and self._curResults[self._curResultIdx]
+    if not currentVar then return end
 
-    -- Find the previous entry with a different NPC ID
-    -- We want the FIRST variant of the PREVIOUS NPC group
-    local foundNpcId = nil
-    for i = 1, #self._curResults do
-        local checkIdx = (self._curResultIdx - i - 1 + #self._curResults) % #self._curResults + 1
-        local id = self._curResults[checkIdx].npcId
-        if id ~= currentNpcId then
-            foundNpcId = id
-            -- Now find the FIRST instance of this NPC ID in results
-            for j, res in ipairs(self._curResults) do
-                if res.npcId == foundNpcId then
-                    prevIdx = j
-                    break
-                end
-            end
-            break
+    local currentId = currentVar.npcId
+    local currentIdx = 1
+    for i, id in ipairs(ids) do
+        if id == currentId then
+            currentIdx = i; break
         end
     end
 
-    self._curResultIdx = prevIdx
+    local prevIdx = ((currentIdx - 2 + total) % total) + 1
+    local prevId = ids[prevIdx]
+
+    -- Find the first result matching this NPC ID
+    for i, res in ipairs(self._curResults) do
+        if res.npcId == prevId then
+            self._curResultIdx = i
+            break
+        end
+    end
     self:SyncState()
 end
 
 function ModelViewer:NextDisp()
-    if not self._curResults or #self._curResults <= 1 then return end
+    local ids = self._curUniqueDispIds or {}
+    local total = #ids
+    if total <= 1 then return end
 
-    local currentVar = self._curResults[self._curResultIdx]
-    local currentDispId = currentVar.displayId
+    local currentVar = self._curResults and self._curResults[self._curResultIdx]
+    if not currentVar then return end
 
-    -- Find the next UNIQUE display ID for this NAME (across all NPC IDs)
-    local found = false
-    for i = 1, #self._curResults do
-        local idx = (self._curResultIdx + i - 1) % #self._curResults + 1
-        local var = self._curResults[idx]
-        if var.displayId ~= currentDispId then
-            self._curResultIdx = idx
-            found = true
+    local currentDid = currentVar.displayId
+    local currentIdx = 1
+    for i, id in ipairs(ids) do
+        if id == currentDid then
+            currentIdx = i; break
+        end
+    end
+
+    local nextIdx = (currentIdx % total) + 1
+    local nextDid = ids[nextIdx]
+
+    -- Find the first result matching this display ID
+    for i, res in ipairs(self._curResults) do
+        if res.displayId == nextDid then
+            self._curResultIdx = i
             break
         end
     end
-
-    -- If no different display ID found for THIS npc, we wrap or stay
-    -- But since we want to iterate UNIQUE display IDs for THIS NPC only:
-    if not found then
-        -- Find first instance of this NPC's first unique display ID
-        for i, var in ipairs(self._curResults) do
-            if var.displayId == currentDispId then -- Changed from var.npcId == currentNpcId
-                self._curResultIdx = i
-                break
-            end
-        end
-    end
-
     self:SyncState()
 end
 
 function ModelViewer:PrevDisp()
-    if not self._curResults or #self._curResults <= 1 then return end
+    local ids = self._curUniqueDispIds or {}
+    local total = #ids
+    if total <= 1 then return end
 
-    local currentVar = self._curResults[self._curResultIdx]
-    local currentDispId = currentVar.displayId
+    local currentVar = self._curResults and self._curResults[self._curResultIdx]
+    if not currentVar then return end
 
-    -- Find the previous UNIQUE display ID for this NAME
-    local found = false
-    for i = 1, #self._curResults do
-        local idx = (self._curResultIdx - i - 1 + #self._curResults) % #self._curResults + 1
-        local var = self._curResults[idx]
-        if var.displayId ~= currentDispId then
-            -- Find the FIRST instance of THIS display ID in the list to be consistent
-            local targetDisp = var.displayId
-            for j, v in ipairs(self._curResults) do
-                if v.displayId == targetDisp then
-                    self._curResultIdx = j
-                    break
-                end
-            end
-            found = true
+    local currentDid = currentVar.displayId
+    local currentIdx = 1
+    for i, id in ipairs(ids) do
+        if id == currentDid then
+            currentIdx = i; break
+        end
+    end
+
+    local prevIdx = ((currentIdx - 2 + total) % total) + 1
+    local prevId = ids[prevIdx]
+
+    -- Find the first result matching this display ID
+    for i, res in ipairs(self._curResults) do
+        if res.displayId == prevId then
+            self._curResultIdx = i
             break
         end
     end
-
-    -- If not found, wrap to LAST unique display ID of this NPC
-    if not found then
-        local lastUniqueIdx = self._curResultIdx
-        local lastDispId = nil
-        for i = #self._curResults, 1, -1 do
-            local var = self._curResults[i]
-            if not lastDispId or var.displayId ~= lastDispId then
-                -- Find the FIRST instance of the last unique display ID
-                local firstInst = i
-                for j = i, 1, -1 do
-                    if self._curResults[j].displayId == var.displayId then -- Changed from var.npcId == currentNpcId and
-                        firstInst = j
-                    else
-                        break
-                    end
-                end
-                lastUniqueIdx = firstInst
-                break
-            end
-        end
-        self._curResultIdx = lastUniqueIdx
-    end
-
     self:SyncState()
 end
 
@@ -1366,18 +1350,7 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
         end
     end
 
-    local function SetIdText(label, id)
-        if id == "NoData" then
-            label:SetText("N/A")
-            label:SetTextColor(1, 0.2, 0.2)
-        else
-            label:SetText(id or "-")
-            label:SetTextColor(1, 0.8, 0)
-        end
-    end
-
-    SetIdText(self.npcIdLabel, npcId)
-    SetIdText(self.displayIdLabel, displayId)
+    -- (ID Text labels removed from rightCol, handled by nav group)
 
     self.lastNpcId = npcId ~= "-" and npcId or nil
     self.lastDisplayId = displayId ~= "-" and displayId or nil
@@ -1399,6 +1372,21 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
     SafeSetDetail(self.locLabel, location)
 
     SafeSetDetail(self.patchLabel, patch or "Unknown")
+
+    local function SetIdText(label, id)
+        if label then
+            if id == "NoData" then
+                label:SetText("N/A")
+                label:SetTextColor(1, 0.2, 0.2)
+            else
+                label:SetText(id or "-")
+                label:SetTextColor(1, 1, 1) -- Use White for nav labels vs gold headers
+            end
+        end
+    end
+
+    SetIdText(self.npcIdLabel, npcId)
+    SetIdText(self.displayIdLabel, displayId)
 
     local extra = ""
     if classification and classification ~= "Normal" then
@@ -1753,7 +1741,12 @@ end
 
 function ModelViewer:ApplyName(npcName)
     local results = NPCDataViewerAPI:Search(npcName)
-    if results then
+    if not results or #results == 0 then
+        -- Try a broader search or harvested search if literal fails
+        results = NPCDataViewerAPI:Search(npcName, "Name")
+    end
+
+    if results and #results > 0 then
         self._curResults = results
         self._curResultIdx = 1
     else
@@ -2013,6 +2006,11 @@ function ModelViewer:GetEligibleIds(category)
                 if fieldData then
                     for id in pairs(fieldData) do eligible[id] = true end
                 end
+
+                -- Significance Tameable logic
+                if category == "significance" and data.tame then
+                    eligible["TAMEABLE"] = true
+                end
             end
         end
     end
@@ -2069,7 +2067,8 @@ function ModelViewer:UpdateSidebar(resetLimit)
     table.sort(results)
 
     local sc = self.sidebarContent
-    for _, btn in ipairs(self.sidebarButtons) do btn:Hide() end
+    -- Use pairs to ensure all buttons are hidden regardless of holes
+    for _, btn in pairs(self.sidebarButtons) do btn:Hide() end
     if self.sidebarPaginationFrame then self.sidebarPaginationFrame:Hide() end
 
     if #results == 0 then
