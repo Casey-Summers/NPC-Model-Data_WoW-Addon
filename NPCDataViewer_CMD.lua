@@ -20,12 +20,74 @@ NPCModelViewerAPI = NPCDataViewerAPI -- Legacy support
 -- Helpers
 -- =========================================================
 
-local function Normalize(query)
-    if not query then return "" end
-    -- Lowercase, trim, collapse multiple spaces
-    local q = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+local function _Trim(str)
+    return (str:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Strict-ish: keeps word characters, converts punctuation to spaces.
+-- Also strips paired leading/trailing quotes so queries like '"Chowdar"' match.
+local function NormalizeStrict(input)
+    if input == nil then return "" end
+    local q = tostring(input)
+
+    -- Normalize smart quotes to ASCII
+    q = q:gsub("[“”]", '"'):gsub("[‘’]", "'")
+    q = q:lower()
+    q = _Trim(q)
+
+    -- Strip paired surrounding quotes repeatedly
+    while true do
+        local first = q:sub(1, 1)
+        local last  = q:sub(-1)
+        if (first == '"' and last == '"') or (first == "'" and last == "'") then
+            q = _Trim(q:sub(2, -2))
+        else
+            break
+        end
+    end
+
+    -- Convert punctuation to spaces, keep alnum + underscore
+    q = q:gsub("[^%w%s]", " ")
     q = q:gsub("%s+", " ")
     return q
+end
+
+-- Compact: removes ALL non-alphanumeric characters (including spaces and punctuation).
+-- Helps match names that vary by punctuation (e.g., 'A-Me 02' vs 'A Me 02').
+local function NormalizeCompact(input)
+    if input == nil then return "" end
+    local q = tostring(input)
+
+    q = q:gsub("[“”]", '"'):gsub("[‘’]", "'")
+    q = q:lower()
+    q = _Trim(q)
+
+    while true do
+        local first = q:sub(1, 1)
+        local last  = q:sub(-1)
+        if (first == '"' and last == '"') or (first == "'" and last == "'") then
+            q = _Trim(q:sub(2, -2))
+        else
+            break
+        end
+    end
+
+    q = q:gsub("[^%w]", "")
+    return q
+end
+
+-- Backwards compatible helper used by ID searches.
+local function Normalize(input)
+    if not input then return "" end
+    local q = tostring(input):lower()
+    if q.trim then q = q:trim() else q = _Trim(q) end
+    q = q:gsub("%s+", " ")
+    return q
+end
+
+local function StripPunctuation(str)
+    if not str then return "" end
+    return tostring(str):gsub("[%s%p]", ""):lower()
 end
 
 function NPCDataViewerAPI:Initialize()
@@ -69,13 +131,13 @@ function NPCDataViewerAPI:BuildFullIdIndex()
     end
 end
 
-function NPCDataViewerAPI:GetGroupKeys(q)
-    if #q < 3 then return {} end
+function NPCDataViewerAPI:GetGroupKeys(qStrict)
+    if #qStrict < 3 then return {} end
 
     local keys = {}
     -- Probing prefixes of 1, 2, and 3 characters
-    for i = 1, math.min(3, #q) do
-        local prefix = q:sub(1, i):upper()
+    for i = 1, math.min(3, #qStrict) do
+        local prefix = qStrict:sub(1, i):upper()
         local baseAddon = "NPCDataViewer_Data_" .. prefix
         local segAddon = "NPCDataViewer_Data_" .. prefix .. "1"
 
@@ -90,8 +152,8 @@ function NPCDataViewerAPI:GetGroupKeys(q)
 
     -- If no matches found yet, return base prefixes to trigger LoadBucket discovery
     if #keys == 0 then
-        table.insert(keys, q:sub(1, 3):upper())
-        table.insert(keys, q:sub(1, 2):upper())
+        table.insert(keys, qStrict:sub(1, 3):upper())
+        table.insert(keys, qStrict:sub(1, 2):upper())
     end
 
     return keys
@@ -118,6 +180,19 @@ function NPCDataViewerAPI:LoadBucket(prefix)
     end
 
     return actualKeys
+end
+
+function NPCDataViewerAPI:LoadAllBuckets()
+    if self._allBucketsLoaded then return end
+
+    -- Probe all possible prefixes A-Z
+    for i = 65, 90 do
+        local prefix = string.char(i)
+        self:LoadBucket(prefix)
+    end
+    -- Also numbers if any? Usually A-Z + specific ones
+    self._allBucketsLoaded = true
+    return true
 end
 
 function NPCDataViewerAPI:_TryLoad(groupKey)
@@ -148,7 +223,9 @@ end
 
 function NPCDataViewerAPI:Search(query, searchType)
     searchType = searchType or "Name"
-    local q = Normalize(query)
+    local qStrict = NormalizeStrict(query)
+    local qCompact = NormalizeCompact(query)
+    local q = qStrict
 
     if searchType == "Name" then
         if #q < 3 then return nil end
@@ -160,7 +237,7 @@ function NPCDataViewerAPI:Search(query, searchType)
     if searchType == "Name" then
         local cache = NPCDataViewerDB.searchCache
         for i, entry in ipairs(cache) do
-            if entry.q == q then
+            if entry.q == qStrict then
                 table.remove(cache, i)
                 table.insert(cache, 1, entry)
                 return entry.results
@@ -176,13 +253,9 @@ function NPCDataViewerAPI:Search(query, searchType)
         local targetId = tonumber(q)
         if not targetId then return nil end
 
-        -- For ID search, we must scan all buckets unless we have a global ID index.
-        -- Given the architecture, we'll probe buckets or use the already loaded ones.
-        -- To be efficient, we'll try to find which buckets contain these IDs.
-        -- However, without a manifest, we'd have to load everything.
-        -- For now, let's search in LOADED buckets and maybe some common ones.
+        -- Ensure deterministic ID search across entire database
+        self:LoadAllBuckets()
 
-        -- Better: Since we don't have a global ID -> Name map, we'll scan NPCDataViewer_Data if present.
         if NPCDataViewer_Data then
             for groupKey, bucket in pairs(NPCDataViewer_Data) do
                 for realName, data in pairs(bucket) do
@@ -192,14 +265,11 @@ function NPCDataViewerAPI:Search(query, searchType)
                             if searchType == "NPC ID" and tonumber(npcId) == targetId then
                                 match = true
                             elseif searchType == "Display ID" then
-                                if type(displayIds) == "table" then
-                                    for _, did in ipairs(displayIds) do
-                                        if tonumber(did) == targetId then
-                                            match = true; break
-                                        end
+                                local dList = type(displayIds) == "table" and displayIds or { displayIds }
+                                for _, did in ipairs(dList) do
+                                    if tonumber(did) == targetId then
+                                        match = true; break
                                     end
-                                elseif tonumber(displayIds) == targetId then
-                                    match = true
                                 end
                             end
 
@@ -211,7 +281,7 @@ function NPCDataViewerAPI:Search(query, searchType)
                 end
             end
         end
-        -- Also check Harvested DB
+
         local hdb = NPCDataViewerDB
         if hdb and hdb.displayIdBatches then
             for _, batch in pairs(hdb.displayIdBatches) do
@@ -223,8 +293,6 @@ function NPCDataViewerAPI:Search(query, searchType)
                         match = true
                     end
                     if match then
-                        -- For harvested, we don't have the full bucket data object
-                        -- We'll create a synthetic result
                         local key = entry.NPC_Name .. "_" .. tostring(entry.NPC_ID) .. "_" .. tostring(entry.Display_ID)
                         if not seenPairs[key] then
                             seenPairs[key] = true
@@ -232,7 +300,6 @@ function NPCDataViewerAPI:Search(query, searchType)
                                 name = entry.NPC_Name,
                                 npcId = entry.NPC_ID,
                                 displayId = entry.Display_ID,
-                                -- (other fields unknown from harvested)
                             })
                         end
                     end
@@ -244,8 +311,8 @@ function NPCDataViewerAPI:Search(query, searchType)
         return nil
     end
 
-    -- Find Buckets
-    local prefixes = self:GetGroupKeys(q)
+    -- Find Buckets for Name Search
+    local prefixes = self:GetGroupKeys(qStrict)
     if #prefixes == 0 then return nil end
 
     local results = {}
@@ -263,7 +330,8 @@ function NPCDataViewerAPI:Search(query, searchType)
                 if bucket then
                     -- 1. Exact Match Scan
                     for realName, data in pairs(bucket) do
-                        if Normalize(realName) == q then
+                        local rnStrict = NormalizeStrict(realName)
+                        if rnStrict == qStrict or NormalizeCompact(realName) == qCompact then
                             self:AppendResults(results, realName, data, seenPairs)
                             exactMatch = true
                         end
@@ -272,8 +340,14 @@ function NPCDataViewerAPI:Search(query, searchType)
                     -- 2. Prefix/Contains Scan (only if no exact match found yet)
                     if not exactMatch then
                         for realName, data in pairs(bucket) do
-                            local normName = Normalize(realName)
-                            if normName:find(q, 1, true) and normName ~= q then
+                            local rnStrict = NormalizeStrict(realName)
+                            local rnCompact = NormalizeCompact(realName)
+
+                            local strictHit = rnStrict:find(qStrict, 1, true) and rnStrict ~= qStrict
+                            local compactHit = (qCompact ~= "") and rnCompact:find(qCompact, 1, true) and
+                            rnCompact ~= qCompact
+
+                            if strictHit or compactHit then
                                 self:AppendResults(results, realName, data, seenPairs)
                                 if #results > 100 then break end
                             end
@@ -313,7 +387,7 @@ function NPCDataViewerAPI:Search(query, searchType)
         -- Cache results (only for Name search)
         if searchType == "Name" then
             local cache = NPCDataViewerDB.searchCache
-            table.insert(cache, 1, { q = q, results = results })
+            table.insert(cache, 1, { q = qStrict, results = results })
             while #cache > 20 do table.remove(cache) end
         end
         return results

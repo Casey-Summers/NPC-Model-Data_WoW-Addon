@@ -3,7 +3,8 @@ NPCDataViewerOptions = {}
 
 -- Default settings
 local defaults = {
-    autoRotate = false, -- Disabled by default
+    autoRotate = false,     -- Disabled by default
+    showDecorations = true, -- Decorative backgrounds
 }
 
 function NPCDataViewerOptions:GetSettings()
@@ -43,6 +44,19 @@ function NPCDataViewerOptions:CreateUI()
         end
     end)
 
+    -- Decorations checkbox
+    local decorationsCheck = CreateFrame("CheckButton", nil, frame, "InterfaceOptionsCheckButtonTemplate")
+    decorationsCheck:SetPoint("TOPLEFT", autoRotateCheck, "BOTTOMLEFT", 0, -42) -- Below autoRotate hint
+    decorationsCheck.Text:SetText("Show decorative backgrounds")
+    decorationsCheck:SetChecked(settings.showDecorations)
+
+    decorationsCheck:SetScript("OnClick", function(self)
+        settings.showDecorations = self:GetChecked()
+        if ModelViewer and ModelViewer.UpdateDecorationState then
+            ModelViewer:UpdateDecorationState()
+        end
+    end)
+
     -- Hint text
     local hint = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     hint:SetPoint("TOPLEFT", autoRotateCheck, "BOTTOMLEFT", 24, -8)
@@ -50,7 +64,7 @@ function NPCDataViewerOptions:CreateUI()
     hint:SetJustifyH("LEFT")
     hint:SetTextColor(0.6, 0.6, 0.6)
     hint:SetText(
-    "Tip: Left-click and drag to rotate models manually.\nRight-click and drag to reposition.\nMouse wheel to zoom in/out.")
+        "Tip: Left-click and drag to rotate models manually.\nRight-click and drag to reposition.\nMouse wheel to zoom in/out.")
 
     self.frame = frame
     return frame
