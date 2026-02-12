@@ -20,6 +20,7 @@ local ROTATION_SPEED_X = 0.025
 local ROTATION_SPEED_Y = 0.025
 local TRANSLATION_SPEED = 0.015
 local ZOOM_SPEED = 0.5
+local MAX_ZOOM_IN = 5.0 -- Increased from 1.5 to allow closer inspection
 
 -- =========================================================
 -- Small utils
@@ -164,6 +165,39 @@ function ModelViewer:Ensure()
     title:SetText("NPC DATA VIEWER")
     title:SetFont("Fonts\\FRIZQT__.TTF", 16, "OUTLINE") -- Larger and styled
     title:SetTextColor(1, 1, 1)
+
+    -- Custom settings button (Notify icon, grayscale)
+    local settingsBtn = CreateFrame("Button", nil, header)
+    settingsBtn:SetSize(20, 20)
+    settingsBtn:SetPoint("RIGHT", -36, 0) -- Left of close button
+
+    local settingsTex = settingsBtn:CreateTexture(nil, "ARTWORK")
+    settingsTex:SetAllPoints()
+    settingsTex:SetAtlas("glues-characterSelect-icon-notify-inProgress-hover", true)
+
+    -- Grayscale initialization
+    if settingsTex.SetDesaturated then
+        settingsTex:SetDesaturated(true)
+    elseif settingsTex.SetDesaturation then
+        settingsTex:SetDesaturation(1)
+    end
+    settingsTex:SetVertexColor(0.65, 0.65, 0.65)
+
+    settingsBtn:SetNormalTexture(settingsTex)
+
+    settingsBtn:SetScript("OnEnter", function()
+        settingsTex:SetVertexColor(0.9, 0.9, 0.9) -- Brighter gray on hover
+    end)
+    settingsBtn:SetScript("OnLeave", function()
+        settingsTex:SetVertexColor(0.65, 0.65, 0.65)
+    end)
+
+    settingsBtn:SetScript("OnClick", function()
+        self:ToggleSettings()
+    end)
+
+    self.settingsBtn = settingsBtn
+
 
     -- Custom close button with Atlas texture (Pure Gray)
     local close = CreateFrame("Button", nil, header)
@@ -375,7 +409,7 @@ function ModelViewer:Ensure()
     bgTex:SetAtlas("transmog-locationBG")
     bgTex:SetPoint("BOTTOM")
     bgTex:SetSize(UI_WIDTH, UI_VIEWPORT_HEIGHT)
-    bgTex:SetAlpha(0.6)
+    bgTex:SetAlpha(0.9)
     self.bgDecoration = bgTex
 
     local model = CreateFrame("PlayerModel", nil, modelContainer)
@@ -490,7 +524,7 @@ function ModelViewer:Ensure()
         -- Large scroll-out range, but cannot be negative enough to pass through NPC center
         -- We'll use modelPosition.z for this
         if delta > 0 then
-            ModelViewer.modelPosition.z = math.min(1.5, ModelViewer.modelPosition.z + ZOOM_SPEED)
+            ModelViewer.modelPosition.z = math.min(MAX_ZOOM_IN, ModelViewer.modelPosition.z + ZOOM_SPEED)
         else
             ModelViewer.modelPosition.z = math.max(-100, ModelViewer.modelPosition.z - ZOOM_SPEED)
         end
@@ -738,38 +772,101 @@ function ModelViewer:Ensure()
     local extraInfo = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     extraInfo:SetPoint("TOP", nameLabel, "BOTTOM", 0, -4) -- More padding
     extraInfo:SetTextColor(1, 0.82, 0)
-    self.extraInfo = extraInfo
+    self.extraInfo       = extraInfo
 
     -- WoWHead Link (Top Right of infoBox)
-    local whLinkGroup = CreateFrame("Frame", nil, infoBox)
-    whLinkGroup:SetSize(180, 20)
-    whLinkGroup:SetPoint("TOPRIGHT", -10, -5)
+    local RIGHT_RESERVED = 35 -- keep room for the element to the right (sidebar arrow etc.)
+    local TOP_INSET      = 5
+    local INNER_PAD_X    = 2  -- minimal inner padding
+    local ICON_GAP       = 1
+
+    local whLinkGroup    = CreateFrame("Button", nil, infoBox, "BackdropTemplate")
+    whLinkGroup:SetHeight(24)
+    whLinkGroup:SetPoint("TOPRIGHT", infoBox, "TOPRIGHT", -RIGHT_RESERVED, -TOP_INSET) -- reserved gap to the right
+    whLinkGroup:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    whLinkGroup:SetBackdrop({
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    whLinkGroup:SetBackdropBorderColor(1, 1, 1, 0)
 
     local whLabel = whLinkGroup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     whLabel:SetText("WoWHead Link:")
     whLabel:SetTextColor(0.5, 0.5, 0.5)
-    -- Shift label left by half of (icon width + spacing) to center the whole group
-    whLabel:SetPoint("CENTER", -11, 0)
+    whLabel:ClearAllPoints()
+    whLabel:SetPoint("LEFT", whLinkGroup, "LEFT", INNER_PAD_X, 0)
 
-    local whLink = CreateFrame("Button", nil, whLinkGroup)
-    whLink:SetSize(16, 16)
-    whLink:SetPoint("LEFT", whLabel, "RIGHT", 6, 0)
-    local whTex = whLink:CreateTexture(nil, "ARTWORK")
-    whTex:SetAllPoints()
-    whTex:SetAtlas("socialqueuing-icon-group")
-    whTex:SetVertexColor(0.5, 0.5, 0.5)
-    whLink:SetNormalTexture(whTex)
+    local whLinkIcon = whLinkGroup:CreateTexture(nil, "ARTWORK")
+    whLinkIcon:SetSize(16, 16)
+    whLinkIcon:ClearAllPoints()
+    whLinkIcon:SetPoint("LEFT", whLabel, "RIGHT", ICON_GAP, 0)
+    whLinkIcon:SetAtlas("socialqueuing-icon-group")
+    whLinkIcon:SetVertexColor(0.5, 0.5, 0.5)
 
-    whLink:SetScript("OnClick", function()
+    -- Shrink-to-fit width with minimal padding, while expanding LEFT (won't overlap right-side element)
+    local labelW = whLabel:GetStringWidth() or 0
+    local totalW = math.ceil(INNER_PAD_X + labelW + ICON_GAP + 16 + INNER_PAD_X)
+    whLinkGroup:SetWidth(totalW)
+
+    local function GetWhUrl()
         local nid = self.lastNpcId
         if nid and nid ~= "-" then
-            local url = "https://www.wowhead.com/npc=" .. nid
+            return "https://www.wowhead.com/npc=" .. nid
+        end
+        return nil
+    end
+
+    whLinkGroup:SetScript("OnClick", function(_, button)
+        local url = GetWhUrl()
+        if not url then return end
+        if button == "RightButton" then
+            StaticPopup_Show("NPCDATAVIEWER_COPY_POPUP", nil, nil, { text = url })
+        else
             StaticPopup_Show("NPCDATAVIEWER_COPY_POPUP", nil, nil, { text = url })
         end
     end)
-    whLink:SetScript("OnEnter", function() whTex:SetVertexColor(1, 1, 1) end)
-    whLink:SetScript("OnLeave", function() whTex:SetVertexColor(0.5, 0.5, 0.5) end)
-    self.whLink = whLink
+
+    whLinkGroup:SetScript("OnEnter", function()
+        whLinkGroup:SetBackdropBorderColor(1, 1, 1, 0.1)
+        whLabel:SetTextColor(1, 1, 1)
+        whLinkIcon:SetVertexColor(1, 1, 1)
+    end)
+    whLinkGroup:SetScript("OnLeave", function()
+        whLinkGroup:SetBackdropBorderColor(1, 1, 1, 0)
+        whLabel:SetTextColor(0.5, 0.5, 0.5)
+        whLinkIcon:SetVertexColor(0.5, 0.5, 0.5)
+    end)
+    self.whLink = whLinkGroup
+
+    -- Sidebar Arrow (Far Right)
+    local sidebarArrow = CreateFrame("Button", nil, infoBox)
+    sidebarArrow:SetSize(24, 24)
+    sidebarArrow:SetPoint("RIGHT", infoBox, "RIGHT", -5, 0)
+    sidebarArrow:SetPoint("TOP", infoBox, "TOP", 0, -5)
+
+    local saTex = sidebarArrow:CreateTexture(nil, "ARTWORK")
+    saTex:SetAllPoints()
+    saTex:SetAtlas("Azerite-PointingArrow")
+
+    -- Was: -math.pi/2 (points RIGHT). Add 180° (pi radians) => points LEFT.
+    saTex:SetRotation((-math.pi / 2) + math.pi)
+
+    -- Grayscale
+    saTex:SetDesaturated(true)
+    saTex:SetVertexColor(0.65, 0.65, 0.65) -- neutral gray tint
+
+    sidebarArrow:SetScript("OnEnter", function()
+        -- Slightly brighter gray on hover (still grayscale)
+        saTex:SetVertexColor(0.9, 0.9, 0.9)
+    end)
+
+    sidebarArrow:SetScript("OnLeave", function()
+        saTex:SetVertexColor(0.65, 0.65, 0.65)
+    end)
+
+    sidebarArrow:SetScript("OnClick", function()
+        self:ToggleSidebar()
+    end)
 
     -- Instructions (Top Left - Stacked)
     local function CreateDetailHint(text, yOff)
@@ -1146,6 +1243,69 @@ function ModelViewer:UpdateDecorationState()
         else
             self.bgDecoration:Hide()
         end
+    end
+end
+
+function ModelViewer:ToggleSidebar(force)
+    if not self.sidebar then return end
+    if force ~= nil then
+        if force then self.sidebar:Show() else self.sidebar:Hide() end
+    else
+        if self.sidebar:IsShown() then self.sidebar:Hide() else self.sidebar:Show() end
+    end
+end
+
+function ModelViewer:ToggleSettings()
+    if not self.settingsFrame then
+        local sf = CreateFrame("Frame", "NPCDV_SettingsFrame", self.frame, "BackdropTemplate")
+        sf:SetSize(300, 200)
+        sf:SetPoint("CENTER")
+        sf:SetFrameLevel(self.frame:GetFrameLevel() + 50)
+        sf:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1
+        })
+        sf:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+        sf:SetBackdropBorderColor(1, 0.82, 0, 1)
+        sf:Hide()
+
+        local title = sf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOP", 0, -10)
+        title:SetText("ADDON SETTINGS")
+
+        local close = CreateFrame("Button", nil, sf, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT")
+
+        local settings = NPCDataViewerOptions:GetSettings()
+
+        local function CreateSettingCheck(text, yOff, key, onChange)
+            local cb = CreateFrame("CheckButton", nil, sf, "InterfaceOptionsCheckButtonTemplate")
+            cb:SetPoint("TOPLEFT", 20, yOff)
+            cb.Text:SetText(text)
+            cb:SetChecked(settings[key])
+            cb:SetScript("OnClick", function(s)
+                settings[key] = s:GetChecked()
+                if onChange then onChange() end
+            end)
+            return cb
+        end
+
+        CreateSettingCheck("Auto-rotate 3D models", -50, "autoRotate", function()
+            self:UpdateToggleVisuals()
+        end)
+
+        CreateSettingCheck("Show decorative backgrounds", -90, "showDecorations", function()
+            self:UpdateDecorationState()
+        end)
+
+        self.settingsFrame = sf
+    end
+
+    if self.settingsFrame:IsShown() then
+        self.settingsFrame:Hide()
+    else
+        self.settingsFrame:Show()
     end
 end
 
