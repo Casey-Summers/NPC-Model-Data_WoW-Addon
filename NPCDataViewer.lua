@@ -97,11 +97,13 @@ ModelViewer = {
     filters = {},     -- Active detail filters
 
     -- Browsing state
-    _curGlobalIdx = 0,
-    _curNpcIds = {},
-    _curNpcIdx = 0,
     _curDispIds = {},
     _curDispIdx = 0,
+
+    -- Caching for performance
+    _sidebarCache = {},
+    _eligibleIdsCache = {},
+    _filterKey = nil,
     _lastSearchName = ""
 }
 
@@ -2556,26 +2558,19 @@ function ModelViewer:_GetDataReverseMap(data)
     return rev
 end
 
-function ModelViewer:_NpcIdPassesFilters(data, npcId, ignoreCategory)
-    local filters = self.filters
-    local settings = NPCDataViewerOptions:GetSettings()
+function ModelViewer:_NpcIdPassesFilters(data, npcId, ignoreCategory, settings, db, filters, rev)
     local n = tonumber(npcId) or npcId
 
     -- 1. Hard blacklist check (Marked as Unused)
-    local db = EnsureHarvestDB()
     if db.unusedNPCs and db.unusedNPCs[tostring(n)] then
         return false
     end
 
-    -- 2. "Remove Unused NPCs" toggle check
-    if settings.removeUnused then
-        -- This part is tricky because it depends on the NAME, but we only have ID here.
-        -- We'll skip prefix check here and handle it in CheckFilters where we have the name.
-    end
-
     if not filters or not next(filters) then return true end
 
-    local rev = self:_GetDataReverseMap(data)
+    if not rev then
+        rev = self:_GetDataReverseMap(data)
+    end
     if not rev then return false end
 
     for cat, filterId in pairs(filters) do
@@ -2640,6 +2635,20 @@ function ModelViewer:_FilterVariantsByActiveFilters(variants)
     return out
 end
 
+function ModelViewer:GetFilterKey()
+    local filters = self.filters or {}
+    local keys = {}
+    for cat, id in pairs(filters) do
+        table.insert(keys, cat .. ":" .. tostring(id))
+    end
+    table.sort(keys)
+    local settings = NPCDataViewerOptions:GetSettings()
+    if settings.removeUnused then
+        table.insert(keys, "ru:true")
+    end
+    return table.concat(keys, "|")
+end
+
 function ModelViewer:SetFilter(category, id, label)
     if type(self.filters) ~= "table" then
         self.filters = {}
@@ -2651,13 +2660,26 @@ function ModelViewer:SetFilter(category, id, label)
         self.filters[category] = id
     end
 
-    self:UpdateSidebar(true)
+    -- Invalidate caches
+    self._sidebarCache = {}
+    self._eligibleIdsCache = {}
+
+    self:RequestSidebarUpdate(true)
 end
 
-function ModelViewer:CheckFilters(data, ignoreCategory, name)
+function ModelViewer:RequestSidebarUpdate(resetLimit)
+    if self._sidebarTimer then self._sidebarTimer:Cancel() end
+    self._sidebarTimer = C_Timer.NewTimer(0.05, function()
+        self:UpdateSidebar(resetLimit)
+    end)
+end
+
+function ModelViewer:CheckFilters(data, ignoreCategory, name, settings, db)
     if not data then return false end
 
-    local settings = NPCDataViewerOptions:GetSettings()
+    settings = settings or NPCDataViewerOptions:GetSettings()
+    db = db or EnsureHarvestDB()
+    local filters = self.filters
 
     -- 1. Prefix Check (if name provided)
     if name and settings.removeUnused then
@@ -2670,8 +2692,9 @@ function ModelViewer:CheckFilters(data, ignoreCategory, name)
 
     -- 2. NPC ID based filters (including blacklist)
     if data.ids then
+        local rev = self:_GetDataReverseMap(data)
         for npcId in pairs(data.ids) do
-            if self:_NpcIdPassesFilters(data, npcId, ignoreCategory) then
+            if self:_NpcIdPassesFilters(data, npcId, ignoreCategory, settings, db, filters, rev) then
                 return true
             end
         end
@@ -2680,18 +2703,19 @@ function ModelViewer:CheckFilters(data, ignoreCategory, name)
 
     -- Fallback: derive from any mapped category list
     if self.CATEGORY_MAP then
+        local rev = self:_GetDataReverseMap(data)
         for _, field in pairs(self.CATEGORY_MAP) do
             local fd = data[field]
             if fd then
                 for _, nids in pairs(fd) do
                     if type(nids) == "table" then
                         for _, nid in ipairs(nids) do
-                            if self:_NpcIdPassesFilters(data, nid, ignoreCategory) then
+                            if self:_NpcIdPassesFilters(data, nid, ignoreCategory, settings, db, filters, rev) then
                                 return true
                             end
                         end
                     else
-                        if self:_NpcIdPassesFilters(data, nids, ignoreCategory) then
+                        if self:_NpcIdPassesFilters(data, nids, ignoreCategory, settings, db, filters, rev) then
                             return true
                         end
                     end
@@ -2704,6 +2728,12 @@ function ModelViewer:CheckFilters(data, ignoreCategory, name)
 end
 
 function ModelViewer:GetEligibleIds(category)
+    local filterKey = self:GetFilterKey()
+    local cacheKey = category .. "||" .. filterKey
+    if self._eligibleIdsCache[cacheKey] then
+        return self._eligibleIdsCache[cacheKey]
+    end
+
     local eligible = {}
 
     -- Ensure all segments are loaded to provide accurate filter options
@@ -2713,12 +2743,16 @@ function ModelViewer:GetEligibleIds(category)
 
     if not NPCDataViewer_Data then return nil end
 
+    local settings = NPCDataViewerOptions:GetSettings()
+    local db = EnsureHarvestDB()
+    local filters = self.filters
+
     for _, bucket in pairs(NPCDataViewer_Data) do
         for _, data in pairs(bucket) do
             if data and data.ids then
+                local rev = self:_GetDataReverseMap(data)
                 for npcId in pairs(data.ids) do
-                    if self:_NpcIdPassesFilters(data, npcId, category) then
-                        local rev = self:_GetDataReverseMap(data)
+                    if self:_NpcIdPassesFilters(data, npcId, category, settings, db, filters, rev) then
                         if rev then
                             local n = tonumber(npcId) or npcId
 
@@ -2744,6 +2778,7 @@ function ModelViewer:GetEligibleIds(category)
         end
     end
 
+    self._eligibleIdsCache[cacheKey] = eligible
     return eligible
 end
 
@@ -2752,49 +2787,30 @@ function ModelViewer:UpdateSidebar(resetLimit)
     if resetLimit then self.sidebarResultsLimit = 100 end
     self.sidebarResultsLimit = self.sidebarResultsLimit or 100
 
-    local results = {}
-    local activeStr = ""
-    local hasFilters = false
-
-    self.sidebar:Show()
-
-    local idx = NPCDataViewer_Indexes
-    for cat, fbtn in pairs(self.sidebarFilterButtons) do
-        local filterId = self.filters[cat]
-        if filterId then
-            local label = "Unknown"
-            if filterId == "TAMEABLE" then
-                label = "Tameable"
-            else
-                local indexKey = cat == "instance" and "instance" or
-                    (cat == "zone" and "zone" or (cat == "significance" and "classification" or cat))
-                if idx and idx[indexKey] then
-                    label = idx[indexKey][filterId] or tostring(filterId)
-                end
-            end
-            fbtn.val:SetText(label)
-            fbtn.val:SetTextColor(1, 0.82, 0)
-        else
-            fbtn.val:SetText("Any")
-            fbtn.val:SetTextColor(0.4, 0.4, 0.4)
-        end
-    end
-
-    local seen = {}
-    if NPCDataViewer_Data then
-        for _, bucket in pairs(NPCDataViewer_Data) do
-            for name, data in pairs(bucket) do
-                if self:CheckFilters(data, nil, name) then
-                    if not seen[name] then
-                        seen[name] = true
-                        table.insert(results, name)
+    local filterKey = self:GetFilterKey()
+    local results
+    if self._sidebarCache[filterKey] then
+        results = self._sidebarCache[filterKey]
+    else
+        results = {}
+        local seen = {}
+        local settings = NPCDataViewerOptions:GetSettings()
+        local db = EnsureHarvestDB()
+        if NPCDataViewer_Data then
+            for _, bucket in pairs(NPCDataViewer_Data) do
+                for name, data in pairs(bucket) do
+                    if self:CheckFilters(data, nil, name, settings, db) then
+                        if not seen[name] then
+                            seen[name] = true
+                            table.insert(results, name)
+                        end
                     end
                 end
             end
         end
+        table.sort(results)
+        self._sidebarCache[filterKey] = results
     end
-
-    table.sort(results)
 
     local sc = self.sidebarContent
     -- Use pairs to ensure all buttons are hidden regardless of holes
