@@ -30,48 +30,31 @@ local function NormalizeStrict(input)
     if input == nil then return "" end
     local q = tostring(input)
 
-    -- Normalize smart quotes to ASCII
+    -- Normalize smart quotes to ASCII first
     q = q:gsub("[“”]", '"'):gsub("[‘’]", "'")
     q = q:lower()
+
+    -- Remove ALL quotes (single and double) to allow searching for names with internal quotes
+    q = q:gsub('"', " "):gsub("'", " ")
+
+    -- Convert punctuation to spaces, keep alphanumeric and underscores
+    q = q:gsub("[^%w%s_]", " ")
+
+    -- Consolidate spaces and trim
+    q = q:gsub("%s+", " ")
     q = _Trim(q)
 
-    -- Strip paired surrounding quotes repeatedly
-    while true do
-        local first = q:sub(1, 1)
-        local last  = q:sub(-1)
-        if (first == '"' and last == '"') or (first == "'" and last == "'") then
-            q = _Trim(q:sub(2, -2))
-        else
-            break
-        end
-    end
-
-    -- Convert punctuation to spaces, keep alnum + underscore
-    q = q:gsub("[^%w%s]", " ")
-    q = q:gsub("%s+", " ")
     return q
 end
 
--- Compact: removes ALL non-alphanumeric characters (including spaces and punctuation).
--- Helps match names that vary by punctuation (e.g., 'A-Me 02' vs 'A Me 02').
 local function NormalizeCompact(input)
     if input == nil then return "" end
     local q = tostring(input)
 
     q = q:gsub("[“”]", '"'):gsub("[‘’]", "'")
     q = q:lower()
-    q = _Trim(q)
 
-    while true do
-        local first = q:sub(1, 1)
-        local last  = q:sub(-1)
-        if (first == '"' and last == '"') or (first == "'" and last == "'") then
-            q = _Trim(q:sub(2, -2))
-        else
-            break
-        end
-    end
-
+    -- Strip everything but alphanumeric
     q = q:gsub("[^%w]", "")
     return q
 end
@@ -132,7 +115,7 @@ function NPCDataViewerAPI:BuildFullIdIndex()
 end
 
 function NPCDataViewerAPI:GetGroupKeys(qStrict)
-    if #qStrict < 3 then return {} end
+    if #qStrict < 1 then return {} end
 
     local keys = {}
     -- Probing prefixes of 1, 2, and 3 characters
@@ -152,8 +135,9 @@ function NPCDataViewerAPI:GetGroupKeys(qStrict)
 
     -- If no matches found yet, return base prefixes to trigger LoadBucket discovery
     if #keys == 0 then
-        table.insert(keys, qStrict:sub(1, 3):upper())
-        table.insert(keys, qStrict:sub(1, 2):upper())
+        if #qStrict >= 3 then table.insert(keys, qStrict:sub(1, 3):upper()) end
+        if #qStrict >= 2 then table.insert(keys, qStrict:sub(1, 2):upper()) end
+        if #qStrict >= 1 then table.insert(keys, qStrict:sub(1, 1):upper()) end
     end
 
     return keys
@@ -228,7 +212,7 @@ function NPCDataViewerAPI:Search(query, searchType)
     local q = qStrict
 
     if searchType == "Name" then
-        if #q < 3 then return nil end
+        if #q < 1 then return nil end
     else
         if #q < 1 then return nil end
     end
@@ -249,6 +233,17 @@ function NPCDataViewerAPI:Search(query, searchType)
     local searchedBuckets = {}
     local seenPairs = {}
 
+    -- 0. Fast-path: Exact literal match (Handles special formats/quotes/short names)
+    if searchType == "Name" then
+        local first = query:sub(1, 1):upper()
+        if first ~= "" and self:_TryLoad(first) then
+            local bucket = NPCDataViewer_Data and NPCDataViewer_Data[first]
+            if bucket and bucket[query] then
+                self:AppendResults(results, query, bucket[query], seenPairs)
+            end
+        end
+    end
+
     if searchType == "NPC ID" or searchType == "Display ID" then
         local targetId = tonumber(q)
         if not targetId then return nil end
@@ -265,11 +260,18 @@ function NPCDataViewerAPI:Search(query, searchType)
                             if searchType == "NPC ID" and tonumber(npcId) == targetId then
                                 match = true
                             elseif searchType == "Display ID" then
-                                local dList = type(displayIds) == "table" and displayIds or { displayIds }
-                                for _, did in ipairs(dList) do
-                                    if tonumber(did) == targetId then
-                                        match = true; break
+                                local function RecursiveMatch(val, target)
+                                    if type(val) == "table" then
+                                        for _, v in pairs(val) do
+                                            if RecursiveMatch(v, target) then return true end
+                                        end
+                                    else
+                                        return tonumber(val) == target
                                     end
+                                    return false
+                                end
+                                if RecursiveMatch(displayIds, targetId) then
+                                    match = true
                                 end
                             end
 
@@ -345,7 +347,7 @@ function NPCDataViewerAPI:Search(query, searchType)
 
                             local strictHit = rnStrict:find(qStrict, 1, true) and rnStrict ~= qStrict
                             local compactHit = (qCompact ~= "") and rnCompact:find(qCompact, 1, true) and
-                            rnCompact ~= qCompact
+                                rnCompact ~= qCompact
 
                             if strictHit or compactHit then
                                 self:AppendResults(results, realName, data, seenPairs)
@@ -453,12 +455,20 @@ end
 
 function NPCDataViewerAPI:GetMetadataValue(data, field, npcId)
     if not data or not data[field] then return nil end
-    for labelId, npcList in pairs(data[field]) do
-        if type(npcList) == "table" then
-            for _, id in ipairs(npcList) do
-                if id == npcId then return labelId end
+
+    local function RecursiveCheck(sub, targetId)
+        if type(sub) == "table" then
+            for _, v in pairs(sub) do
+                if RecursiveCheck(v, targetId) then return true end
             end
-        elseif npcList == npcId then
+        else
+            return sub == targetId
+        end
+        return false
+    end
+
+    for labelId, val in pairs(data[field]) do
+        if RecursiveCheck(val, npcId) then
             return labelId
         end
     end

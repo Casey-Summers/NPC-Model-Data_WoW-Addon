@@ -1,8 +1,9 @@
 local ADDON_NAME = ...
 
-local function NPCDV_Print(...)
-    print("|cff00ff88NPC Data Viewer:|r", ...)
-end
+-- Unused NPCs identification prefixes
+local UNUSED_PREFIXES = {
+    "[DNT]", "[DNP]", "PH", "[PH]", "Test", "Dummy", "Unused", "Debug"
+}
 
 -- =========================================================
 -- UI CONFIGURATION CONSTANTS (Adjust these for size)
@@ -13,6 +14,7 @@ local UI_INFO_HEIGHT = 180
 local UI_SEARCH_HEIGHT = 34
 local UI_HEADER_HEIGHT = 34
 local UI_DETAIL_TEXT_SIZE = 12
+local UI_MAX_NAME_WIDTH = 280
 local UI_PADDING = 8 -- Spacing between elements
 
 -- Rotation and Translation Speed Constants
@@ -115,6 +117,7 @@ local function EnsureHarvestDB()
     NPCDataViewerDB.meta.version = DB_VERSION
 
     NPCDataViewerDB.displayIdBatches = NPCDataViewerDB.displayIdBatches or {}
+    NPCDataViewerDB.unusedNPCs = NPCDataViewerDB.unusedNPCs or {}
     NPCDataViewerDB.count = NPCDataViewerDB.count or 0
 
     return NPCDataViewerDB
@@ -819,11 +822,7 @@ function ModelViewer:Ensure()
     whLinkGroup:SetScript("OnClick", function(_, button)
         local url = GetWhUrl()
         if not url then return end
-        if button == "RightButton" then
-            StaticPopup_Show("NPCDATAVIEWER_COPY_POPUP", nil, nil, { text = url })
-        else
-            StaticPopup_Show("NPCDATAVIEWER_COPY_POPUP", nil, nil, { text = url })
-        end
+        StaticPopup_Show("NPCDATAVIEWER_COPY_POPUP", nil, nil, { text = url })
     end)
 
     whLinkGroup:SetScript("OnEnter", function()
@@ -836,6 +835,51 @@ function ModelViewer:Ensure()
         whLabel:SetTextColor(0.5, 0.5, 0.5)
         whLinkIcon:SetVertexColor(0.5, 0.5, 0.5)
     end)
+
+    -- Mark as Unused NPC Button
+    local unusedBtn = CreateFrame("Button", nil, infoBox, "BackdropTemplate")
+    unusedBtn:SetHeight(18)
+    unusedBtn:SetPoint("TOPRIGHT", whLinkGroup, "BOTTOMRIGHT", 0, -2)
+    unusedBtn:SetBackdrop({
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    unusedBtn:SetBackdropBorderColor(1, 1, 1, 0)
+
+    local ubLabel = unusedBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ubLabel:SetText("Mark As Unused")
+    ubLabel:SetTextColor(0.5, 0.5, 0.5)
+    ubLabel:SetPoint("LEFT", 4, 0)
+
+    local ubIcon = unusedBtn:CreateTexture(nil, "ARTWORK")
+    ubIcon:SetSize(12, 12)
+    ubIcon:SetPoint("LEFT", ubLabel, "RIGHT", 4, 0)
+    ubIcon:SetAtlas("common-icon-redx")
+    ubIcon:SetDesaturated(true)
+    ubIcon:SetVertexColor(0.5, 0.5, 0.5)
+
+    unusedBtn:SetWidth(ubLabel:GetStringWidth() + 24)
+
+    unusedBtn:SetScript("OnClick", function()
+        local nid = self.lastNpcId
+        if nid then
+            local db = EnsureHarvestDB()
+            db.unusedNPCs[tostring(nid)] = true
+            self:UpdateSidebar(true)
+        end
+    end)
+
+    unusedBtn:SetScript("OnEnter", function()
+        unusedBtn:SetBackdropBorderColor(1, 0.2, 0.2, 0.4)
+        ubLabel:SetTextColor(1, 0.4, 0.4)
+        ubIcon:SetVertexColor(1, 0.4, 0.4)
+    end)
+    unusedBtn:SetScript("OnLeave", function()
+        unusedBtn:SetBackdropBorderColor(1, 1, 1, 0)
+        ubLabel:SetTextColor(0.5, 0.5, 0.5)
+        ubIcon:SetVertexColor(0.5, 0.5, 0.5)
+    end)
+    self.unusedBtn = unusedBtn
     self.whLink = whLinkGroup
 
     -- Sidebar Arrow (Far Right)
@@ -988,8 +1032,8 @@ function ModelViewer:Ensure()
 
     -- Filter grid section (Replaces filterStatus)
     local filterGrid = CreateFrame("Frame", nil, sidebar)
-    filterGrid:SetSize(210, 110)
-    filterGrid:SetPoint("TOP", 0, -28) -- Moved closer to title
+    filterGrid:SetSize(210, 120) -- Slightly taller for vertical padding
+    filterGrid:SetPoint("TOP", 0, -32)
     self.filterGrid = filterGrid
 
     local categories = { "type", "family", "zone", "instance", "patch", "significance" }
@@ -997,27 +1041,30 @@ function ModelViewer:Ensure()
 
     for i, cat in ipairs(categories) do
         local fbtn = CreateFrame("Button", nil, filterGrid, "BackdropTemplate")
-        fbtn:SetSize(100, 36) -- Increased height (was 32)
+        fbtn:SetSize(100, 36) -- Smaller for padding
         local row = math.floor((i - 1) / 2)
         local col = (i - 1) % 2
-        fbtn:SetPoint("TOPLEFT", col * 105, -row * 40) -- Adjusted spacing (was 36)
+        -- 105 x-step, 40 y-step adds padding (5px horizontal, 4px vertical)
+        fbtn:SetPoint("TOPLEFT", col * 105, -row * 40)
+        fbtn:RegisterForClicks("AnyUp")
         fbtn:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8x8",
             edgeFile = "Interface\\Buttons\\WHITE8x8",
             edgeSize = 1
         })
-        fbtn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
-        fbtn:SetBackdropBorderColor(1, 0.82, 0, 0) -- Hidden by default
+        fbtn:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
+        fbtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
 
         local title = fbtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        title:SetPoint("TOP", 0, -6) -- More top spacing (was -4)
+        title:SetPoint("TOP", 0, -6)
         title:SetText(cat:upper())
-        title:SetTextColor(0.5, 0.5, 0.5)
+        title:SetTextColor(1, 0.82, 0) -- Gold labels per image
 
         local val = fbtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        val:SetPoint("BOTTOM", 0, 6) -- More bottom spacing (was 4)
+        val:SetPoint("BOTTOM", 0, 6)
         val:SetText("Any")
-        val:SetWidth(90)
+        val:SetTextColor(0.5, 0.5, 0.5) -- Gray value for "Any"
+        val:SetWidth(95)
         val:SetMaxLines(1)
         val:SetWordWrap(false)
         fbtn.val = val
@@ -1042,11 +1089,52 @@ function ModelViewer:Ensure()
     end
     self.sidebarFilterButtons = filterButtons
 
-    -- (filterStatus removed and replaced by filterGrid)
+    -- ... (rest of fbtn logic)
+
+    local removeUnused = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
+    removeUnused:SetSize(210, 22)
+    removeUnused:SetPoint("TOP", filterGrid, "BOTTOM", 0, -8)
+    removeUnused:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1
+    })
+    removeUnused:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+    removeUnused:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+    local ruLabel = removeUnused:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    ruLabel:SetPoint("CENTER")
+    ruLabel:SetText("Remove Unused NPCs")
+    ruLabel:SetTextColor(0.6, 0.6, 0.6)
+
+    local function UpdateRUVisuals()
+        local settings = NPCDataViewerOptions:GetSettings()
+        if settings.removeUnused then
+            removeUnused:SetBackdropBorderColor(1, 0.82, 0, 1)
+            ruLabel:SetTextColor(1, 0.82, 0)
+        else
+            removeUnused:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+            ruLabel:SetTextColor(0.6, 0.6, 0.6)
+        end
+    end
+
+    removeUnused:SetScript("OnClick", function()
+        NPCDataViewerOptions:ToggleSetting("removeUnused")
+        UpdateRUVisuals()
+        ModelViewer:UpdateSidebar(true)
+    end)
+    removeUnused:SetScript("OnEnter", function()
+        removeUnused:SetBackdropColor(0.2, 0.2, 0.2, 1)
+    end)
+    removeUnused:SetScript("OnLeave", function()
+        removeUnused:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+    end)
+    self.sidebarRemoveUnused = removeUnused
+    UpdateRUVisuals()
 
     local clearFilters = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
-    clearFilters:SetSize(210, 18)                              -- Expand to full grid width (was 180)
-    clearFilters:SetPoint("TOP", filterGrid, "BOTTOM", 0, -15) -- More spacing
+    clearFilters:SetSize(210, 20)
+    clearFilters:SetPoint("TOP", removeUnused, "BOTTOM", 0, -6)
     clearFilters:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -1061,8 +1149,11 @@ function ModelViewer:Ensure()
     clearTxt:SetTextColor(0.8, 0.4, 0.4)
 
     clearFilters:SetScript("OnClick", function()
-        ModelViewer.filters = {}
-        ModelViewer:UpdateSidebar(true)
+        self.filters = {}
+        local settings = NPCDataViewerOptions:GetSettings()
+        settings.removeUnused = false
+        UpdateRUVisuals()
+        self:UpdateSidebar(true)
     end)
     clearFilters:SetScript("OnEnter", function()
         clearFilters:SetBackdropColor(0.4, 0, 0, 0.8)
@@ -1079,7 +1170,7 @@ function ModelViewer:Ensure()
     separator:SetColorTexture(1, 1, 1, 0.1)
 
     local scrollFrame = CreateFrame("ScrollFrame", "NPCDV_SidebarScroll", sidebar, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 10, -185) -- Moved down for clear button + separator
+    scrollFrame:SetPoint("TOPLEFT", separator, "BOTTOMLEFT", 0, -8)
     scrollFrame:SetPoint("BOTTOMRIGHT", -25, 5)
 
     -- Modern Scrollbar skin (Strip ALL default art)
@@ -1298,6 +1389,8 @@ function ModelViewer:ToggleSettings()
         CreateSettingCheck("Show decorative backgrounds", -90, "showDecorations", function()
             self:UpdateDecorationState()
         end)
+
+        CreateSettingCheck("Filter Unused from search suggestions", -130, "excludeUnusedFromSuggestions")
 
         self.settingsFrame = sf
     end
@@ -1656,7 +1749,18 @@ end
 function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, classification, patch, tameable,
                                    encounter, instance)
     if not self.frame then return end
-    self.nameLabel:SetText(name or "-")
+
+    -- Custom name display with max width truncation
+    local displayName = name or "-"
+    self.nameLabel:SetText(displayName)
+    self.nameLabel:SetWidth(0) -- Auto size first to check width
+    local actualWidth = self.nameLabel:GetStringWidth()
+    if actualWidth > UI_MAX_NAME_WIDTH then
+        self.nameLabel:SetWidth(UI_MAX_NAME_WIDTH)
+        self.nameLabel:SetWordWrap(false)
+    else
+        self.nameLabel:SetWidth(math.min(actualWidth + 20, UI_MAX_NAME_WIDTH))
+    end
 
     local function SafeSetDetail(fs, txt)
         fs:SetText(txt or "-")
@@ -1716,13 +1820,13 @@ function ModelViewer:UpdateDetails(name, npcId, displayId, zone, ntype, family, 
     end
     self.extraInfo:SetText(extra)
 
-    -- Update Wowhead link visibility
+    -- Update button visibilities
+    local hasNpc = npcId and npcId ~= "-"
     if self.whLink then
-        if npcId and npcId ~= "-" then
-            self.whLink:Show()
-        else
-            self.whLink:Hide()
-        end
+        if hasNpc then self.whLink:Show() else self.whLink:Hide() end
+    end
+    if self.unusedBtn then
+        if hasNpc then self.unusedBtn:Show() else self.unusedBtn:Hide() end
     end
 end
 
@@ -1844,13 +1948,28 @@ function ModelViewer:ComputeSuggestions(typed)
     local results = NPCDataViewerAPI:Search(typed, "Name")
     if not results then return {} end
 
+    local settings = NPCDataViewerOptions:GetSettings()
+    local filterUnusedSuggestions = settings.excludeUnusedFromSuggestions
+
     local matches = {}
     local seen = {}
     for _, res in ipairs(results) do
         if not seen[res.name] then
-            table.insert(matches, res.name)
-            seen[res.name] = true
-            if #matches >= self.MAX_SUGGEST then break end
+            -- Prefix check for Unused NPCs
+            local isUnused = false
+            if filterUnusedSuggestions then
+                for _, pre in ipairs(UNUSED_PREFIXES) do
+                    if res.name:sub(1, #pre):lower() == pre:lower() then
+                        isUnused = true; break
+                    end
+                end
+            end
+
+            if not isUnused then
+                table.insert(matches, res.name)
+                seen[res.name] = true
+                if #matches >= self.MAX_SUGGEST then break end
+            end
         end
     end
     return matches
@@ -1901,9 +2020,6 @@ function ModelViewer:TryIdSequence(labelPrefix, idList, applyFn, onDone)
             return
         end
         resolved = true
-        if ok then
-            NPCDV_Print("SUCCESS via:", labelPrefix, "ID:", chosenId)
-        end
         onDone(ok, chosenId)
     end
 
@@ -2207,10 +2323,10 @@ function ModelViewer:ShowMiniSearch(category, anchor)
 
         local scrollFrame = CreateFrame("ScrollFrame", nil, ms, "UIPanelScrollFrameTemplate")
         scrollFrame:SetPoint("TOPLEFT", 5, -38)
-        scrollFrame:SetPoint("BOTTOMRIGHT", -25, 8)
+        scrollFrame:SetPoint("BOTTOMRIGHT", -22, 8) -- Slightly more room for scrollbar
 
         local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-        scrollChild:SetSize(160, 1)
+        scrollChild:SetSize(170, 1)
         scrollFrame:SetScrollChild(scrollChild)
 
         ms.input = input
@@ -2272,7 +2388,29 @@ function ModelViewer:UpdateMiniSearch(category, text)
             matches[#matches + 1] = { id = "TAMEABLE", label = "Tameable Only" }
         end
     end
-    table.sort(matches, function(a, b) return a.label < b.label end)
+
+    table.sort(matches, function(a, b)
+        -- Pin "Open World" (ID 0) to top of Instance list
+        if category == "instance" then
+            if a.id == 0 then return true end
+            if b.id == 0 then return false end
+        elseif category == "patch" then
+            -- Custom sorting for patches (1.1, 2.1, 10.0, 11.0)
+            local function GetParts(p)
+                local parts = {}
+                for s in tostring(p):gmatch("%d+") do
+                    table.insert(parts, tonumber(s) or 0)
+                end
+                return parts
+            end
+            local pa, pb = GetParts(a.label), GetParts(b.label)
+            for j = 1, math.max(#pa, #pb) do
+                local va, vb = pa[j] or 0, pb[j] or 0
+                if va ~= vb then return va < vb end
+            end
+        end
+        return a.label < b.label
+    end)
 
     local sc = ms.scrollChild
     for _, btn in ipairs(ms.buttons) do btn:Hide() end
@@ -2281,13 +2419,15 @@ function ModelViewer:UpdateMiniSearch(category, text)
         local btn = ms.buttons[i]
         if not btn then
             btn = CreateFrame("Button", nil, sc)
-            btn:SetSize(150, 18)
+            btn:SetSize(170, 18) -- Match scrollChild width
             btn:SetNormalFontObject("GameFontHighlightSmall")
             local fs = btn:GetFontString()
             if fs then
                 fs:ClearAllPoints()
                 fs:SetPoint("LEFT", 5, 0)
+                fs:SetPoint("RIGHT", -5, 0) -- Constrain width
                 fs:SetJustifyH("LEFT")
+                fs:SetWordWrap(false)
             end
             btn:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
             local hl = btn:GetHighlightTexture()
@@ -2417,18 +2557,28 @@ function ModelViewer:_GetDataReverseMap(data)
     end
 
     -- instanceId -> encounterId(s) (derive npcId -> instanceId(s) via enc)
+    local hasInstance = {}
     if data.inst and data.enc then
         for instId, eids in pairs(data.inst) do
             local elist = (type(eids) == "table") and eids or { eids }
             for _, eid in ipairs(elist) do
                 local nids = data.enc[eid]
                 if nids then
-                    if type(nids) == "table" then
-                        for _, nid in ipairs(nids) do addSet(rev.instance, nid, instId) end
-                    else
-                        addSet(rev.instance, nids, instId)
+                    local nidList = (type(nids) == "table") and nids or { nids }
+                    for _, nid in ipairs(nidList) do
+                        addSet(rev.instance, nid, instId)
+                        hasInstance[nid] = true
                     end
                 end
+            end
+        end
+    end
+
+    -- Assign ID 0 (Open World) to any NPC that isn't in an instance
+    if data.ids then
+        for nid in pairs(data.ids) do
+            if not hasInstance[nid] then
+                addSet(rev.instance, nid, 0)
             end
         end
     end
@@ -2439,12 +2589,25 @@ end
 
 function ModelViewer:_NpcIdPassesFilters(data, npcId, ignoreCategory)
     local filters = self.filters
+    local settings = NPCDataViewerOptions:GetSettings()
+    local n = tonumber(npcId) or npcId
+
+    -- 1. Hard blacklist check (Marked as Unused)
+    local db = EnsureHarvestDB()
+    if db.unusedNPCs and db.unusedNPCs[tostring(n)] then
+        return false
+    end
+
+    -- 2. "Remove Unused NPCs" toggle check
+    if settings.removeUnused then
+        -- This part is tricky because it depends on the NAME, but we only have ID here.
+        -- We'll skip prefix check here and handle it in CheckFilters where we have the name.
+    end
+
     if not filters or not next(filters) then return true end
 
     local rev = self:_GetDataReverseMap(data)
     if not rev then return false end
-
-    local n = tonumber(npcId) or npcId
 
     for cat, filterId in pairs(filters) do
         if cat ~= ignoreCategory then
@@ -2465,23 +2628,41 @@ end
 function ModelViewer:_FilterVariantsByActiveFilters(variants)
     if not variants or #variants == 0 then return variants end
     local filters = self.filters
-    if not filters or not next(filters) then return variants end
+    local settings = NPCDataViewerOptions:GetSettings()
+    local db = EnsureHarvestDB()
 
     local out = {}
     for _, row in ipairs(variants) do
         local ok = true
-        for cat, filterId in pairs(filters) do
-            if cat == "significance" and filterId == "TAMEABLE" then
-                if row.tameable ~= "true" then
+
+        -- Blacklist Check
+        if db.unusedNPCs and db.unusedNPCs[tostring(row.npcId)] then
+            ok = false
+        end
+
+        -- Prefix Check
+        if ok and settings.removeUnused and row.name then
+            for _, pre in ipairs(UNUSED_PREFIXES) do
+                if row.name:sub(1, #pre):lower() == pre:lower() then
                     ok = false; break
                 end
-            elseif cat == "significance" or cat == "classification" then
-                if row.class ~= filterId then
-                    ok = false; break
-                end
-            else
-                if row[cat] ~= filterId then
-                    ok = false; break
+            end
+        end
+
+        if ok and filters and next(filters) then
+            for cat, filterId in pairs(filters) do
+                if cat == "significance" and filterId == "TAMEABLE" then
+                    if row.tameable ~= "true" and row.tameable ~= true then
+                        ok = false; break
+                    end
+                elseif cat == "significance" or cat == "classification" then
+                    if row.class ~= filterId then
+                        ok = false; break
+                    end
+                else
+                    if row[cat] ~= filterId then
+                        ok = false; break
+                    end
                 end
             end
         end
@@ -2501,15 +2682,24 @@ function ModelViewer:SetFilter(category, id, label)
         self.filters[category] = id
     end
 
-    NPCDV_Print("Filter added: " .. category .. " = " .. (label or tostring(id)))
     self:UpdateSidebar(true)
 end
 
-function ModelViewer:CheckFilters(data, ignoreCategory)
+function ModelViewer:CheckFilters(data, ignoreCategory, name)
     if not data then return false end
-    if not self.filters or not next(self.filters) then return true end
 
-    -- Prefer ids as canonical npc set
+    local settings = NPCDataViewerOptions:GetSettings()
+
+    -- 1. Prefix Check (if name provided)
+    if name and settings.removeUnused then
+        for _, pre in ipairs(UNUSED_PREFIXES) do
+            if name:sub(1, #pre):lower() == pre:lower() then
+                return false
+            end
+        end
+    end
+
+    -- 2. NPC ID based filters (including blacklist)
     if data.ids then
         for npcId in pairs(data.ids) do
             if self:_NpcIdPassesFilters(data, npcId, ignoreCategory) then
@@ -2625,7 +2815,7 @@ function ModelViewer:UpdateSidebar(resetLimit)
     if NPCDataViewer_Data then
         for _, bucket in pairs(NPCDataViewer_Data) do
             for name, data in pairs(bucket) do
-                if self:CheckFilters(data) then
+                if self:CheckFilters(data, nil, name) then
                     if not seen[name] then
                         seen[name] = true
                         table.insert(results, name)

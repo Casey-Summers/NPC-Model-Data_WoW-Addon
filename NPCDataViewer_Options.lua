@@ -3,8 +3,10 @@ NPCDataViewerOptions = {}
 
 -- Default settings
 local defaults = {
-    autoRotate = false,     -- Disabled by default
-    showDecorations = true, -- Decorative backgrounds
+    autoRotate = false,
+    showDecorations = true,
+    removeUnused = false,                -- Toggle for "Remove Unused NPCs"
+    excludeUnusedFromSuggestions = true, -- Hide "Unused" NPCs from search suggestions by default
 }
 
 function NPCDataViewerOptions:GetSettings()
@@ -15,14 +17,33 @@ function NPCDataViewerOptions:GetSettings()
             NPCDataViewerDB.settings[k] = v
         end
     end
+    -- Migrate old settings if any
+    for k, v in pairs(defaults) do
+        if NPCDataViewerDB.settings[k] == nil then
+            NPCDataViewerDB.settings[k] = v
+        end
+    end
     return NPCDataViewerDB.settings
 end
+
+function NPCDataViewerOptions:SetSetting(key, value)
+    local s = self:GetSettings()
+    s[key] = value
+end
+
+function NPCDataViewerOptions:ToggleSetting(key)
+    local s = self:GetSettings()
+    s[key] = not s[key]
+    return s[key]
+end
+
+-- Custom settings UI logic is handled in NPCDataViewer.lua's ToggleSettings
+-- But we keep this file as the central source of truth for settings state.
 
 function NPCDataViewerOptions:CreateUI()
     local frame = CreateFrame("Frame", "NPCDataViewerOptionsFrame")
     frame.name = "NPC Data Viewer"
 
-    -- Title
     local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
     title:SetText("NPC Data Viewer")
@@ -32,31 +53,25 @@ function NPCDataViewerOptions:CreateUI()
     text:SetWidth(400)
     text:SetJustifyH("LEFT")
     text:SetText(
-        "Access settings directly within the addon via the Gear icon in the header.\n\nUse /ndv or /npcviewer to open the interface.")
+        "Settings are now consolidated directly within the addon interface.\n\nClick the Gear icon in the NPC Data Viewer header to adjust options.\n\nCommands: /ndv, /npcviewer")
 
     return frame
 end
 
--- Initialize and register with WoW's interface options on load
 local function InitializeOptions()
     local frame = NPCDataViewerOptions:CreateUI()
-
-    -- Try modern API first (Dragonflight+)
     if Settings and Settings.RegisterCanvasLayoutCategory then
-        local category, layout = Settings.RegisterCanvasLayoutCategory(frame, frame.name)
-        category.ID = frame.name
+        local category = Settings.RegisterCanvasLayoutCategory(frame, frame.name)
         Settings.RegisterAddOnCategory(category)
     elseif InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(frame)
     end
 end
 
--- Register on ADDON_LOADED
-local optionsLoader = CreateFrame("Frame")
-optionsLoader:RegisterEvent("ADDON_LOADED")
-optionsLoader:SetScript("OnEvent", function(self, event, addonName)
-    if addonName == "NPCDataViewer" then
+local loader = CreateFrame("Frame")
+loader:RegisterEvent("ADDON_LOADED")
+loader:SetScript("OnEvent", function(self, event, addon)
+    if addon == "NPCDataViewer" then
         InitializeOptions()
-        self:UnregisterEvent("ADDON_LOADED")
     end
 end)
