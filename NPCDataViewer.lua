@@ -15,14 +15,17 @@ local UI_SEARCH_HEIGHT = 34
 local UI_HEADER_HEIGHT = 34
 local UI_DETAIL_TEXT_SIZE = 12
 local UI_MAX_NAME_WIDTH = 280
-local UI_PADDING = 8 -- Spacing between elements
+local UI_PADDING = 8
+
+-- Collective Theme Colors
+local UI_THEME_R, UI_THEME_G, UI_THEME_B = 1, 0.82, 0
 
 -- Rotation and Translation Speed Constants
 local ROTATION_SPEED_X = 0.025
 local ROTATION_SPEED_Y = 0.025
 local TRANSLATION_SPEED = 0.015
 local ZOOM_SPEED = 0.5
-local MAX_ZOOM_IN = 5.0 -- Increased from 1.5 to allow closer inspection
+local MAX_ZOOM_IN = 5.0
 
 -- =========================================================
 -- Small utils
@@ -167,7 +170,7 @@ function ModelViewer:Ensure()
     title:SetPoint("CENTER", 0, 0)
     title:SetText("NPC DATA VIEWER")
     title:SetFont("Fonts\\FRIZQT__.TTF", 16, "OUTLINE") -- Larger and styled
-    title:SetTextColor(1, 1, 1)
+    title:SetTextColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
 
     -- Custom settings button (Notify icon, grayscale)
     local settingsBtn = CreateFrame("Button", nil, header)
@@ -184,15 +187,15 @@ function ModelViewer:Ensure()
     elseif settingsTex.SetDesaturation then
         settingsTex:SetDesaturation(1)
     end
-    settingsTex:SetVertexColor(0.65, 0.65, 0.65)
+    settingsTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
 
     settingsBtn:SetNormalTexture(settingsTex)
 
     settingsBtn:SetScript("OnEnter", function()
-        settingsTex:SetVertexColor(0.9, 0.9, 0.9) -- Brighter gray on hover
+        settingsTex:SetVertexColor(1, 1, 1) -- Highlight
     end)
     settingsBtn:SetScript("OnLeave", function()
-        settingsTex:SetVertexColor(0.65, 0.65, 0.65)
+        settingsTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
     end)
 
     settingsBtn:SetScript("OnClick", function()
@@ -210,8 +213,8 @@ function ModelViewer:Ensure()
     local closeTex = close:CreateTexture(nil, "ARTWORK")
     closeTex:SetAllPoints()
     closeTex:SetAtlas("common-icon-redx")
-    closeTex:SetDesaturation(1)            -- Force grayscale
-    closeTex:SetVertexColor(0.7, 0.7, 0.7) -- Gray color
+    closeTex:SetDesaturation(1)                                 -- Force grayscale
+    closeTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B) -- Theme color
     close:SetNormalTexture(closeTex)
 
     close:SetScript("OnEnter", function(self)
@@ -219,7 +222,7 @@ function ModelViewer:Ensure()
     end)
 
     close:SetScript("OnLeave", function(self)
-        closeTex:SetVertexColor(0.7, 0.7, 0.7)
+        closeTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
     end)
 
     close:SetScript("OnClick", function()
@@ -1173,45 +1176,7 @@ function ModelViewer:Ensure()
     scrollFrame:SetPoint("TOPLEFT", separator, "BOTTOMLEFT", 0, -8)
     scrollFrame:SetPoint("BOTTOMRIGHT", -25, 5)
 
-    -- Modern Scrollbar skin (Strip ALL default art)
-    local sbName = scrollFrame:GetName() .. "ScrollBar"
-    if _G[sbName] then
-        local sb = _G[sbName]
-        sb:ClearAllPoints()
-        sb:SetPoint("TOPRIGHT", scrollFrame, "TOPRIGHT", 15, -16)
-        sb:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", 15, 16)
-        sb:SetWidth(6)
-
-        -- Hide default art specifically
-        local function HideTex(tex)
-            if tex then
-                tex:SetAlpha(0); tex:Hide()
-            end
-        end
-        HideTex(sb.ScrollUpButton)
-        HideTex(sb.ScrollDownButton)
-        HideTex(_G[sbName .. "ScrollUpButton"])
-        HideTex(_G[sbName .. "ScrollDownButton"])
-        HideTex(_G[sbName .. "Top"])
-        HideTex(_G[sbName .. "Bottom"])
-        HideTex(_G[sbName .. "Middle"])
-        HideTex(_G[sbName .. "BG"])
-        HideTex(_G[sbName .. "Track"])
-
-        local thumb = sb:GetThumbTexture()
-        if thumb then
-            thumb:SetTexture("Interface\\Buttons\\WHITE8x8")
-            thumb:SetSize(6, 40)
-            thumb:SetVertexColor(0.4, 0.4, 0.4, 0.8)
-        end
-
-        if not sb.modernBG then
-            local bg = sb:CreateTexture(nil, "BACKGROUND")
-            bg:SetAllPoints()
-            bg:SetColorTexture(0, 0, 0, 0.3)
-            sb.modernBG = bg
-        end
-    end
+    self:SkinScrollbar(_G[scrollFrame:GetName() .. "ScrollBar"], scrollFrame)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetSize(190, 1)
@@ -2321,9 +2286,10 @@ function ModelViewer:ShowMiniSearch(category, anchor)
         input:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
         input:SetTextInsets(5, 5, 0, 0)
 
-        local scrollFrame = CreateFrame("ScrollFrame", nil, ms, "UIPanelScrollFrameTemplate")
+        local scrollFrame = CreateFrame("ScrollFrame", "NPCDV_MiniSearchScroll", ms, "UIPanelScrollFrameTemplate")
         scrollFrame:SetPoint("TOPLEFT", 5, -38)
         scrollFrame:SetPoint("BOTTOMRIGHT", -22, 8) -- Slightly more room for scrollbar
+        self:SkinScrollbar(_G[scrollFrame:GetName() .. "ScrollBar"], scrollFrame)
 
         local scrollChild = CreateFrame("Frame", nil, scrollFrame)
         scrollChild:SetSize(170, 1)
@@ -2434,9 +2400,12 @@ function ModelViewer:UpdateMiniSearch(category, text)
             if hl then hl:SetVertexColor(1, 1, 1, 0.1) end
             ms.buttons[i] = btn
         end
-        btn:ClearAllPoints()
         btn:SetPoint("TOPLEFT", 0, -(i - 1) * 18)
         btn:SetText(match.label)
+        local fs = btn:GetFontString()
+        if fs then
+            fs:SetJustifyH("LEFT")
+        end
         btn:SetScript("OnClick", function()
             self:SetFilter(category, match.id, match.label)
             ms:Hide()
@@ -2874,8 +2843,13 @@ function ModelViewer:UpdateSidebar(resetLimit)
         btn:ClearAllPoints()
         btn:SetPoint("TOPLEFT", 0, -(i - 1) * 22)
         btn.label:SetText(name)
-        btn:SetScript("OnClick", function()
-            self:ApplyName(name)
+        btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        btn:SetScript("OnClick", function(_, button)
+            if button == "RightButton" then
+                self:MarkNameAsUnused(name)
+            else
+                self:ApplyName(name)
+            end
         end)
         btn:Show()
     end
@@ -2958,6 +2932,60 @@ end
 -- =========================================================
 SLASH_NPCVIEWER1 = "/npcviewer"
 SLASH_NPCVIEWER2 = "/ndv"
+
+function ModelViewer:SkinScrollbar(sb, sf)
+    if not sb then return end
+    sb:ClearAllPoints()
+    if sf then
+        sb:SetPoint("TOPRIGHT", sf, "TOPRIGHT", 15, -16)
+        sb:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", 15, 16)
+    end
+    sb:SetWidth(6)
+
+    local function HideTex(tex)
+        if tex then
+            tex:SetAlpha(0); tex:Hide()
+        end
+    end
+    HideTex(sb.ScrollUpButton)
+    HideTex(sb.ScrollDownButton)
+    local sbName = sb:GetName()
+    if sbName then
+        HideTex(_G[sbName .. "ScrollUpButton"])
+        HideTex(_G[sbName .. "ScrollDownButton"])
+        HideTex(_G[sbName .. "Top"])
+        HideTex(_G[sbName .. "Bottom"])
+        HideTex(_G[sbName .. "Middle"])
+        HideTex(_G[sbName .. "BG"])
+        HideTex(_G[sbName .. "Track"])
+    end
+
+    local thumb = sb:GetThumbTexture()
+    if thumb then
+        thumb:SetTexture("Interface\\Buttons\\WHITE8x8")
+        thumb:SetSize(6, 40)
+        thumb:SetVertexColor(0.4, 0.4, 0.4, 0.8)
+    end
+
+    if not sb.modernBG then
+        local bg = sb:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(0, 0, 0, 0.3)
+        sb.modernBG = bg
+    end
+end
+
+function ModelViewer:MarkNameAsUnused(name)
+    local results = NPCDataViewerAPI:Search(name)
+    if results then
+        local db = EnsureHarvestDB()
+        for _, res in ipairs(results) do
+            db.unusedNPCs[tostring(res.npcId)] = true
+        end
+        self:UpdateSidebar(true)
+    end
+end
+
 SLASH_NPCVIEWER3 = "/npcdataviewer"
 
 SlashCmdList.NPCVIEWER = function(message)
