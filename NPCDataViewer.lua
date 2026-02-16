@@ -2,8 +2,18 @@ local ADDON_NAME = ...
 
 -- Unused NPCs identification prefixes
 local UNUSED_PREFIXES = {
-    "[DNT]", "[DNP]", "PH", "[PH]", "Test", "Dummy", "Unused", "Debug"
+    "[DNT]", "[DNP]", "PH", "[PH]", "Test", "Dummy", "Unused", "Debug", "(ph)"
 }
+
+local INCLUDED_PHRASES = {
+    "Encounter", "Mount", "Battle Pet", "World Boss"
+}
+
+-- Localize Globals for Performance and Linting
+local tonumber, tostring, pairs, ipairs, type, math, table = tonumber, tostring, pairs, ipairs, type, math, table
+local CreateFrame, UIParent, GetCursorPosition, StaticPopup_Show = CreateFrame, UIParent, GetCursorPosition,
+    StaticPopup_Show
+local C_Timer, GameTooltip = C_Timer, GameTooltip
 
 -- =========================================================
 -- UI CONFIGURATION CONSTANTS (Adjust these for size)
@@ -28,8 +38,96 @@ local ZOOM_SPEED = 0.5
 local MAX_ZOOM_IN = 5.0
 
 -- =========================================================
+-- Local Harvest DB (SavedVariables)
+-- =========================================================
+local DB_VERSION = 5
+local BATCH_ID_RANGE = 1000
+
+local function EnsureHarvestDB()
+    if not NPCDataViewerDB or type(NPCDataViewerDB) ~= "table" then
+        NPCDataViewerDB = {}
+    end
+
+    NPCDataViewerDB.meta = NPCDataViewerDB.meta or {}
+    NPCDataViewerDB.meta.version = DB_VERSION
+
+    NPCDataViewerDB.displayIdBatches = NPCDataViewerDB.displayIdBatches or {}
+    NPCDataViewerDB.unusedNPCs = NPCDataViewerDB.unusedNPCs or {}
+    NPCDataViewerDB.unusedNames = NPCDataViewerDB.unusedNames or {}
+    NPCDataViewerDB.count = NPCDataViewerDB.count or 0
+
+    return NPCDataViewerDB
+end
+
+-- =========================================================
+-- Model Viewer (UI + logic)
+-- =========================================================
+ModelViewer = {
+    _namesIndexBuilt = false,
+    _nameIndex = nil, -- array: { {name="X", lower="x"} ... }
+    _pendingSuggestToken = 0,
+    lookup = nil,     -- runtime lookup for DB
+    searchType = "Name",
+    filters = {},     -- Active detail filters
+
+    -- Browsing state
+    _curDispIds = {},
+    _curDispIdx = 0,
+
+    -- Caching for performance
+    _sidebarCache = {},
+    _eligibleIdsCache = {},
+    _filterKey = nil,
+    _lastSearchName = ""
+}
+
+-- =========================================================
 -- Small utils
 -- =========================================================
+
+function ModelViewer:IsNameUnused(name)
+    if not name then return false end
+    local lowerName = name:lower()
+
+    -- 0. Explicit User Override (Whitelist/Blacklist)
+    local db = EnsureHarvestDB()
+    if db.unusedNames then
+        if db.unusedNames[name] == false then return false end -- Explicitly shown by user
+        if db.unusedNames[name] == true then return true end   -- Explicitly hidden by user
+    end
+
+    -- 1. Check if it starts with any "Unused" prefixes (Automatic)
+    for _, pre in ipairs(UNUSED_PREFIXES) do
+        if lowerName:sub(1, #pre) == pre:lower() then
+            return true
+        end
+    end
+
+    -- 2. Check if it contains any "Included" phrases (Overrides unused status)
+    for _, phrase in ipairs(INCLUDED_PHRASES) do
+        if lowerName:find(phrase:lower(), 1, true) then
+            return false
+        end
+    end
+
+    return false
+end
+
+function ModelViewer:ToggleNameUnused(name)
+    if not name then return end
+    local db = EnsureHarvestDB()
+
+    local isCurrentlyUnused = self:IsNameUnused(name)
+
+    -- If it's currently unused (by prefix or manual hide), we want to make it "Show"
+    -- If it's currently shown, we want to make it "Hide"
+    if isCurrentlyUnused then
+        db.unusedNames[name] = false
+    else
+        db.unusedNames[name] = true
+    end
+    self:RequestSidebarUpdate()
+end
 
 local function Trim(text)
     if not text then
@@ -88,45 +186,7 @@ StaticPopupDialogs["NPCDATAVIEWER_COPY_POPUP"] = {
 -- =========================================================
 -- Model Viewer (UI + logic)
 -- =========================================================
-ModelViewer = {
-    _namesIndexBuilt = false,
-    _nameIndex = nil, -- array: { {name="X", lower="x"} ... }
-    _pendingSuggestToken = 0,
-    lookup = nil,     -- runtime lookup for DB
-    searchType = "Name",
-    filters = {},     -- Active detail filters
 
-    -- Browsing state
-    _curDispIds = {},
-    _curDispIdx = 0,
-
-    -- Caching for performance
-    _sidebarCache = {},
-    _eligibleIdsCache = {},
-    _filterKey = nil,
-    _lastSearchName = ""
-}
-
--- =========================================================
--- Local Harvest DB (SavedVariables)
--- =========================================================
-local DB_VERSION = 5
-local BATCH_ID_RANGE = 1000
-
-local function EnsureHarvestDB()
-    if not NPCDataViewerDB or type(NPCDataViewerDB) ~= "table" then
-        NPCDataViewerDB = {}
-    end
-
-    NPCDataViewerDB.meta = NPCDataViewerDB.meta or {}
-    NPCDataViewerDB.meta.version = DB_VERSION
-
-    NPCDataViewerDB.displayIdBatches = NPCDataViewerDB.displayIdBatches or {}
-    NPCDataViewerDB.unusedNPCs = NPCDataViewerDB.unusedNPCs or {}
-    NPCDataViewerDB.count = NPCDataViewerDB.count or 0
-
-    return NPCDataViewerDB
-end
 
 -- =========================================================
 -- Model Viewer (UI + logic)
@@ -167,6 +227,8 @@ function ModelViewer:Ensure()
     headerBg:SetAllPoints()
     headerBg:SetAtlas("UI-Achievement-Border-2")
     headerBg:SetAlpha(0.8)
+    self.headerBg = headerBg
+
 
     local title = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
     title:SetPoint("CENTER", 0, 0)
@@ -215,9 +277,10 @@ function ModelViewer:Ensure()
     local closeTex = close:CreateTexture(nil, "ARTWORK")
     closeTex:SetAllPoints()
     closeTex:SetAtlas("common-icon-redx")
-    closeTex:SetDesaturation(1)                                 -- Force grayscale
-    closeTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B) -- Theme color
     close:SetNormalTexture(closeTex)
+    local nt = close:GetNormalTexture()
+    nt:SetDesaturated(true)
+    nt:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
 
     close:SetScript("OnEnter", function(self)
         closeTex:SetVertexColor(1, 1, 1) -- Highlight on hover
@@ -344,9 +407,30 @@ function ModelViewer:Ensure()
 
     inputContainer:SetScript("OnMouseDown", function() input:SetFocus() end)
 
-    local go = CreateModernButton(searchGroup, "SEARCH", 90)
-    go:SetPoint("LEFT", inputContainer, "RIGHT", 8, 0)
-    go:SetHeight(UI_SEARCH_HEIGHT)
+    local filtersBtn = CreateModernButton(searchGroup, "FILTERS", 96)
+    filtersBtn:SetPoint("LEFT", inputContainer, "RIGHT", 4, 0)
+    filtersBtn:SetHeight(UI_SEARCH_HEIGHT)
+
+    local saTex = filtersBtn:CreateTexture(nil, "OVERLAY")
+    saTex:SetSize(12, 12) -- Slightly smaller arrow
+    saTex:SetAtlas("Azerite-PointingArrow")
+    saTex:SetRotation((-math.pi / 2) + math.pi)
+    saTex:SetDesaturated(true)
+    saTex:SetVertexColor(0.65, 0.65, 0.65)
+    filtersBtn.arrow = saTex
+
+    -- Center Text and Arrow together
+    local gap = 6
+    local arrowW = 12
+    filtersBtn.label:ClearAllPoints()
+    filtersBtn.label:SetPoint("CENTER", filtersBtn, "CENTER", -(arrowW + gap) / 2, 0)
+    saTex:SetPoint("LEFT", filtersBtn.label, "RIGHT", gap, 0)
+
+    filtersBtn:SetScript("OnClick", function() ModelViewer:ToggleSidebar() end)
+    filtersBtn:HookScript("OnEnter", function() saTex:SetVertexColor(1, 1, 1) end)
+    filtersBtn:HookScript("OnLeave", function() saTex:SetVertexColor(0.65, 0.65, 0.65) end)
+
+    self.filtersBtn = filtersBtn
 
     -- Global Navigation (Now inside the model container)
     local function CreateAtlasButton(parent, atlas, xOff, flipX)
@@ -367,13 +451,13 @@ function ModelViewer:Ensure()
         return btn
     end
 
-    -- Suggestions dropdown
+    -- Suggestions dropdown with ScrollFrame
     local suggest = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     suggest:SetPoint("TOPLEFT", input, "BOTTOMLEFT", -5, -2)
     suggest:SetPoint("TOPRIGHT", input, "BOTTOMRIGHT", 5, -2)
-    suggest:SetHeight(1)
+    suggest:SetHeight(200)
     suggest:Hide()
-    suggest:SetFrameStrata("DIALOG")
+    suggest:SetFrameStrata("TOOLTIP")
     suggest:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -382,13 +466,23 @@ function ModelViewer:Ensure()
     suggest:SetBackdropColor(0, 0, 0, 0.95)
     suggest:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.5)
 
+    local suggestScroll = CreateFrame("ScrollFrame", "NPCDV_SuggestScroll", suggest, "UIPanelScrollFrameTemplate")
+    suggestScroll:SetPoint("TOPLEFT", 6, -6)
+    suggestScroll:SetPoint("BOTTOMRIGHT", -25, 6)
+    self:SkinScrollbar(_G[suggestScroll:GetName() .. "ScrollBar"], suggestScroll)
+
+    local suggestChild = CreateFrame("Frame", nil, suggestScroll)
+    suggestChild:SetSize(1, 1)
+    suggestScroll:SetScrollChild(suggestChild)
+    self.suggestChild = suggestChild
+
     local suggestButtons = {}
-    local MAX_SUGGEST = 8
+    local MAX_SUGGEST = 30
     for index = 1, MAX_SUGGEST do
-        local button = CreateFrame("Button", nil, suggest)
+        local button = CreateFrame("Button", nil, suggestChild)
         button:SetHeight(20)
-        button:SetPoint("TOPLEFT", 6, -6 - ((index - 1) * 20))
-        button:SetPoint("TOPRIGHT", -6, -6 - ((index - 1) * 20))
+        button:SetPoint("TOPLEFT", 0, -(index - 1) * 20)
+        button:SetPoint("TOPRIGHT", 0, -(index - 1) * 20)
         button:Hide()
 
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -400,6 +494,9 @@ function ModelViewer:Ensure()
 
         suggestButtons[index] = button
     end
+    self.suggestButtons = suggestButtons
+    self.MAX_SUGGEST = MAX_SUGGEST
+    self.suggest = suggest
 
     local modelContainer = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     modelContainer:SetSize(UI_WIDTH - 2, UI_VIEWPORT_HEIGHT)
@@ -411,6 +508,19 @@ function ModelViewer:Ensure()
     })
     modelContainer:SetBackdropColor(0, 0, 0, 0.4)
     modelContainer:SetBackdropBorderColor(1, 1, 1, 0.08)
+
+    -- Corner Curlies (Moved to modelContainer)
+    local tlCurlie = modelContainer:CreateTexture(nil, "OVERLAY")
+    tlCurlie:SetSize(48, 48)
+    tlCurlie:SetPoint("TOPLEFT", -2, 2)
+    tlCurlie:SetAtlas("Talent-TopLeftCurlies")
+    self.topLeftCurlie = tlCurlie
+
+    local trCurlie = modelContainer:CreateTexture(nil, "OVERLAY")
+    trCurlie:SetSize(48, 48)
+    trCurlie:SetPoint("TOPRIGHT", 2, 2)
+    trCurlie:SetAtlas("Talent-TopRightCurlies")
+    self.topRightCurlie = trCurlie
 
     -- Decorative background
     local bgTex = modelContainer:CreateTexture(nil, "BACKGROUND")
@@ -430,6 +540,8 @@ function ModelViewer:Ensure()
         hint:SetText(text)
         hint:SetTextColor(0.6, 0.6, 0.6)
         hint:SetAlpha(0.6)
+        if not self.hints then self.hints = {} end
+        table.insert(self.hints, hint)
         return hint
     end
 
@@ -744,6 +856,10 @@ function ModelViewer:Ensure()
         model:SetPortraitZoom(0) -- 0 = default view
     end)
 
+    self.controlBar = controlBar
+    self.autoRotateBtn = autoRotateBtn
+    self.axisToggleBtn = axisToggleBtn
+
     -- No Model Warning
     local noModelWarning = modelContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     noModelWarning:SetPoint("CENTER")
@@ -790,7 +906,7 @@ function ModelViewer:Ensure()
 
     local whLinkGroup    = CreateFrame("Button", nil, infoBox, "BackdropTemplate")
     whLinkGroup:SetHeight(24)
-    whLinkGroup:SetPoint("TOPRIGHT", infoBox, "TOPRIGHT", -RIGHT_RESERVED, -TOP_INSET) -- reserved gap to the right
+    whLinkGroup:SetPoint("TOPRIGHT", infoBox, "TOPRIGHT", -5, -TOP_INSET) -- Moved to fill arrow gap
     whLinkGroup:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     whLinkGroup:SetBackdrop({
         edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -866,11 +982,9 @@ function ModelViewer:Ensure()
     unusedBtn:SetWidth(ubLabel:GetStringWidth() + 24)
 
     unusedBtn:SetScript("OnClick", function()
-        local nid = self.lastNpcId
-        if nid then
-            local db = EnsureHarvestDB()
-            db.unusedNPCs[tostring(nid)] = true
-            self:UpdateSidebar(true)
+        local name = self.nameLabel:GetText()
+        if name and name ~= "-" then
+            self:ToggleNameUnused(name)
         end
     end)
 
@@ -888,34 +1002,6 @@ function ModelViewer:Ensure()
     self.whLink = whLinkGroup
 
     -- Sidebar Arrow (Far Right)
-    local sidebarArrow = CreateFrame("Button", nil, infoBox)
-    sidebarArrow:SetSize(24, 24)
-    sidebarArrow:SetPoint("RIGHT", infoBox, "RIGHT", -5, 0)
-    sidebarArrow:SetPoint("TOP", infoBox, "TOP", 0, -5)
-
-    local saTex = sidebarArrow:CreateTexture(nil, "ARTWORK")
-    saTex:SetAllPoints()
-    saTex:SetAtlas("Azerite-PointingArrow")
-
-    -- Was: -math.pi/2 (points RIGHT). Add 180° (pi radians) => points LEFT.
-    saTex:SetRotation((-math.pi / 2) + math.pi)
-
-    -- Grayscale
-    saTex:SetDesaturated(true)
-    saTex:SetVertexColor(0.65, 0.65, 0.65) -- neutral gray tint
-
-    sidebarArrow:SetScript("OnEnter", function()
-        -- Slightly brighter gray on hover (still grayscale)
-        saTex:SetVertexColor(0.9, 0.9, 0.9)
-    end)
-
-    sidebarArrow:SetScript("OnLeave", function()
-        saTex:SetVertexColor(0.65, 0.65, 0.65)
-    end)
-
-    sidebarArrow:SetScript("OnClick", function()
-        self:ToggleSidebar()
-    end)
 
     -- Instructions (Top Left - Stacked)
     local function CreateDetailHint(text, yOff)
@@ -924,11 +1010,14 @@ function ModelViewer:Ensure()
         hint:SetText(text)
         hint:SetTextColor(0.5, 0.5, 0.5)
         hint:SetAlpha(0.6)
+        if not self.hints then self.hints = {} end
+        table.insert(self.hints, hint)
         return hint
     end
 
     CreateDetailHint("L-Click: Filter", 0)
     CreateDetailHint("R-Click: Copy", 14)
+    CreateDetailHint("Sidebar R-Click: Unused", 28)
 
     -- 2. Left Column (Source Info)
     local leftCol = CreateFrame("Frame", nil, infoBox)
@@ -1016,7 +1105,7 @@ function ModelViewer:Ensure()
     self.CATEGORY_MAP = CATEGORY_MAP
 
     -- Sidebar for filtered results
-    local sidebarHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 3)
+    local sidebarHeight = UI_HEADER_HEIGHT + UI_SEARCH_HEIGHT + UI_VIEWPORT_HEIGHT + UI_INFO_HEIGHT + (UI_PADDING * 4)
     local sidebar = CreateFrame("Frame", "NPCDV_Sidebar", frame, "BackdropTemplate")
     sidebar:SetSize(220, sidebarHeight)
     sidebar:SetPoint("TOPLEFT", frame, "TOPRIGHT", 5, 0)
@@ -1029,6 +1118,21 @@ function ModelViewer:Ensure()
     sidebar:SetBackdropBorderColor(1, 1, 1, 0.1)
     sidebar:Hide()
     self.sidebar = sidebar
+
+    -- Gold-tinted exit button for Sidebar
+    local sideClose = CreateFrame("Button", nil, sidebar)
+    sideClose:SetSize(18, 18)
+    sideClose:SetPoint("TOPRIGHT", -5, -5)
+    local scTex = sideClose:CreateTexture(nil, "ARTWORK")
+    scTex:SetAllPoints()
+    scTex:SetAtlas("common-icon-redx")
+    sideClose:SetNormalTexture(scTex)
+    local snt = sideClose:GetNormalTexture()
+    snt:SetDesaturated(true)
+    snt:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B)
+    sideClose:SetScript("OnClick", function() sidebar:Hide() end)
+    sideClose:SetScript("OnEnter", function() scTex:SetVertexColor(1, 1, 1) end)
+    sideClose:SetScript("OnLeave", function() scTex:SetVertexColor(UI_THEME_R, UI_THEME_G, UI_THEME_B) end)
 
     local lateralTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lateralTitle:SetPoint("TOP", 0, -8) -- Moved slightly up
@@ -1109,7 +1213,7 @@ function ModelViewer:Ensure()
 
     local ruLabel = removeUnused:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     ruLabel:SetPoint("CENTER")
-    ruLabel:SetText("Remove Unused NPCs")
+    ruLabel:SetText("Filter Unused NPCs")
     ruLabel:SetTextColor(0.6, 0.6, 0.6)
 
     local function UpdateRUVisuals()
@@ -1155,9 +1259,13 @@ function ModelViewer:Ensure()
 
     clearFilters:SetScript("OnClick", function()
         self.filters = {}
+        for _, fbtn in pairs(self.sidebarFilterButtons or {}) do
+            fbtn.val:SetText("Any")
+            fbtn.val:SetTextColor(0.5, 0.5, 0.5)
+        end
         local settings = NPCDataViewerOptions:GetSettings()
         settings.removeUnused = false
-        UpdateRUVisuals()
+        if UpdateRUVisuals then UpdateRUVisuals() end
         self:UpdateSidebar(true)
     end)
     clearFilters:SetScript("OnEnter", function()
@@ -1244,14 +1352,21 @@ function ModelViewer:Ensure()
         count:SetPoint("TOP", valBtn, "BOTTOM", 0, -2)
         count:SetTextColor(0.8, 0.6, 0)
 
+        cont.lbl = lbl
+        cont.prev = prev
+        cont.next = next
+        cont.count = count
+
         return val, count, prev, next
     end
 
     self.npcIdLabel, self.npcCounter, self.npcPrev, self.npcNext = CreateNavControl(navGroup, "NPC ID", 0,
         function() self:PrevNpc() end, function() self:NextNpc() end)
+    self.npcNavGroup = self.npcCounter:GetParent()
 
     self.displayIdLabel, self.dispCounter, self.dispPrev, self.dispNext = CreateNavControl(navGroup, "DISPLAY ID", -60,
         function() self:PrevDisp() end, function() self:NextDisp() end)
+    self.dispNavGroup = self.dispCounter:GetParent()
 
     self.warningLabel = infoBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.warningLabel:SetPoint("BOTTOM", infoBox, "BOTTOM", 0, 4)
@@ -1261,7 +1376,6 @@ function ModelViewer:Ensure()
     -- Store references back to self
     self.frame = frame
     self.input = input
-    self.go = go
     self.model = model
     self.suggest = suggest
     self.suggestButtons = suggestButtons
@@ -1270,6 +1384,23 @@ function ModelViewer:Ensure()
     -- Apply initial states from settings
     self:UpdateToggleVisuals()
     self:UpdateDecorationState()
+    self:UpdateVisibility()
+end
+
+function ModelViewer:UpdateVisibility()
+    local settings = NPCDataViewerOptions:GetSettings()
+
+    -- Hints visibility (Model and Details)
+    if self.hints then
+        for _, hint in ipairs(self.hints) do
+            if settings.hideHints then hint:Hide() else hint:Show() end
+        end
+    end
+
+    -- Interaction Buttons (Only hide model control bar, exclude auto/axis buttons)
+    if self.controlBar then
+        if settings.hideInteraction then self.controlBar:Hide() else self.controlBar:Show() end
+    end
 end
 
 function ModelViewer:UpdateGlobalIndexFromCurrent()
@@ -1295,12 +1426,19 @@ end
 
 function ModelViewer:UpdateDecorationState()
     local settings = NPCDataViewerOptions and NPCDataViewerOptions:GetSettings()
+    local show = (settings and settings.showDecorations)
+
     if self.bgDecoration then
-        if settings and settings.showDecorations then
-            self.bgDecoration:Show()
-        else
-            self.bgDecoration:Hide()
-        end
+        if show then self.bgDecoration:Show() else self.bgDecoration:Hide() end
+    end
+    if self.headerBg then
+        if show then self.headerBg:Show() else self.headerBg:Hide() end
+    end
+    if self.topLeftCurlie then
+        if show then self.topLeftCurlie:Show() else self.topLeftCurlie:Hide() end
+    end
+    if self.topRightCurlie then
+        if show then self.topRightCurlie:Show() else self.topRightCurlie:Hide() end
     end
 end
 
@@ -1309,7 +1447,12 @@ function ModelViewer:ToggleSidebar(force)
     if force ~= nil then
         if force then self.sidebar:Show() else self.sidebar:Hide() end
     else
-        if self.sidebar:IsShown() then self.sidebar:Hide() else self.sidebar:Show() end
+        if self.sidebar:IsShown() then
+            self.sidebar:Hide()
+        else
+            self.sidebar:Show()
+            if self.UpdateSidebar then self:UpdateSidebar(true) end
+        end
     end
 end
 
@@ -1358,6 +1501,16 @@ function ModelViewer:ToggleSettings()
         end)
 
         CreateSettingCheck("Filter Unused from search suggestions", -130, "excludeUnusedFromSuggestions")
+
+        CreateSettingCheck("Hide Hints (gray info text)", -160, "hideHints", function()
+            self:UpdateVisibility()
+        end)
+
+        CreateSettingCheck("Hide Interaction Buttons", -190, "hideInteraction", function()
+            self:UpdateVisibility()
+        end)
+
+        sf:SetHeight(230)
 
         self.settingsFrame = sf
     end
@@ -1888,9 +2041,15 @@ function ModelViewer:ShowSuggestions(matches)
         return
     end
 
-    local visibleCount = math.min(#matches, self.MAX_SUGGEST)
-    local height = 6 + (visibleCount * 18) + 6
+    local count = #matches
+    local visibleCount = math.min(count, self.MAX_SUGGEST)
+
+    -- Dynamic height based on results, max 200
+    local height = (visibleCount * 20) + 12
+    if height > 200 then height = 200 end
+
     self.suggest:SetHeight(height)
+    self.suggestChild:SetSize(self.input:GetWidth() - 20, count * 20)
     self.suggest:Show()
 
     for index = 1, self.MAX_SUGGEST do
@@ -1925,10 +2084,8 @@ function ModelViewer:ComputeSuggestions(typed)
             -- Prefix check for Unused NPCs
             local isUnused = false
             if filterUnusedSuggestions then
-                for _, pre in ipairs(UNUSED_PREFIXES) do
-                    if res.name:sub(1, #pre):lower() == pre:lower() then
-                        isUnused = true; break
-                    end
+                if self:IsNameUnused(res.name) then
+                    isUnused = true
                 end
             end
 
@@ -2605,11 +2762,10 @@ function ModelViewer:_FilterVariantsByActiveFilters(variants)
         end
 
         -- Prefix Check
+        -- Name-based filter (Prefixes vs Included phrases)
         if ok and settings.removeUnused and row.name then
-            for _, pre in ipairs(UNUSED_PREFIXES) do
-                if row.name:sub(1, #pre):lower() == pre:lower() then
-                    ok = false; break
-                end
+            if self:IsNameUnused(row.name) then
+                ok = false
             end
         end
 
@@ -2656,8 +2812,17 @@ function ModelViewer:SetFilter(category, id, label)
 
     if id == nil then
         self.filters[category] = nil
+        if self.sidebarFilterButtons and self.sidebarFilterButtons[category] then
+            self.sidebarFilterButtons[category].val:SetText("Any")
+            self.sidebarFilterButtons[category].val:SetTextColor(0.5, 0.5, 0.5)
+        end
     else
         self.filters[category] = id
+        if self.sidebarFilterButtons and self.sidebarFilterButtons[category] then
+            local displayLabel = label or id
+            self.sidebarFilterButtons[category].val:SetText(displayLabel)
+            self.sidebarFilterButtons[category].val:SetTextColor(1, 1, 1)
+        end
     end
 
     -- Invalidate caches
@@ -2682,11 +2847,10 @@ function ModelViewer:CheckFilters(data, ignoreCategory, name, settings, db)
     local filters = self.filters
 
     -- 1. Prefix Check (if name provided)
+    -- 1. Name-based override (Prefixes vs Included phrases)
     if name and settings.removeUnused then
-        for _, pre in ipairs(UNUSED_PREFIXES) do
-            if name:sub(1, #pre):lower() == pre:lower() then
-                return false
-            end
+        if self:IsNameUnused(name) then
+            return false
         end
     end
 
@@ -2862,11 +3026,20 @@ function ModelViewer:UpdateSidebar(resetLimit)
         btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         btn:SetScript("OnClick", function(_, button)
             if button == "RightButton" then
-                self:MarkNameAsUnused(name)
+                self:ToggleNameUnused(name)
             else
                 self:ApplyName(name)
             end
         end)
+
+        -- Visual feedback for unused
+        if self:IsNameUnused(name) then
+            btn.label:SetTextColor(0.4, 0.4, 0.4)
+            btn:SetAlpha(0.6)
+        else
+            btn.label:SetTextColor(1, 1, 1)
+            btn:SetAlpha(1.0)
+        end
         btn:Show()
     end
 
@@ -2921,9 +3094,7 @@ function ModelViewer:BindEvents()
     end
     self._eventsBound = true
 
-    self.go:SetScript("OnClick", function()
-        self:ApplyInput()
-    end)
+    -- We use self.filtersBtn instead of goBtn now
 
     self.input:SetScript("OnEnterPressed", function()
         self:ApplyInput()
@@ -2992,14 +3163,7 @@ function ModelViewer:SkinScrollbar(sb, sf)
 end
 
 function ModelViewer:MarkNameAsUnused(name)
-    local results = NPCDataViewerAPI:Search(name)
-    if results then
-        local db = EnsureHarvestDB()
-        for _, res in ipairs(results) do
-            db.unusedNPCs[tostring(res.npcId)] = true
-        end
-        self:UpdateSidebar(true)
-    end
+    self:ToggleNameUnused(name)
 end
 
 SLASH_NPCVIEWER3 = "/npcdataviewer"

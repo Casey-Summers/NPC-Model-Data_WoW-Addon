@@ -7,6 +7,8 @@ local defaults = {
     showDecorations = true,
     removeUnused = false,
     excludeUnusedFromSuggestions = true,
+    hideHints = false,
+    hideNav = false,
 }
 
 function NPCDataViewerOptions:GetSettings()

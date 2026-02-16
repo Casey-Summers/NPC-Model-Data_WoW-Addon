@@ -30,11 +30,23 @@ local function NormalizeStrict(input)
     if input == nil then return "" end
     local q = tostring(input)
 
+    -- If a user pastes a full line like b["Name"] = ..., extract the Name robustly
+    -- Handles b["..."] and b['...']
+    local luaKey = q:match('^b%[%"(.-)%"%]%s*=') or q:match("^b%[%'(.-)%'%]%s*=")
+    if luaKey then
+        q = luaKey
+    end
+
     -- Normalize smart quotes to ASCII first
     q = q:gsub("[“”]", '"'):gsub("[‘’]", "'")
+
+    -- Clean literal escape notation if it looks like bad data (direct \" or \')
+    q = q:gsub("\\\"", '"'):gsub("\\'", "'")
+
     q = q:lower()
 
-    -- Remove ALL quotes (single and double) to allow searching for names with internal quotes
+    -- Remove ALL quotes (single and double) for strict content comparison
+    -- (e.g. searching for "Spell"-Flinger will match Spell-Flinger)
     q = q:gsub('"', " "):gsub("'", " ")
 
     -- Convert punctuation to spaces, keep alphanumeric and underscores
@@ -235,12 +247,36 @@ function NPCDataViewerAPI:Search(query, searchType)
 
     -- 0. Fast-path: Exact literal match (Handles special formats/quotes/short names)
     if searchType == "Name" then
-        local first = query:sub(1, 1):upper()
-        if first ~= "" and self:_TryLoad(first) then
-            local bucket = NPCDataViewer_Data and NPCDataViewer_Data[first]
-            if bucket and bucket[query] then
-                self:AppendResults(results, query, bucket[query], seenPairs)
+        local function TryLiteral(name)
+            local first = name:sub(1, 1):upper()
+            if first ~= "" and self:_TryLoad(first) then
+                local bucket = NPCDataViewer_Data and NPCDataViewer_Data[first]
+                if bucket and bucket[name] then
+                    return bucket[name], name
+                end
             end
+            return nil
+        end
+
+        local data, matchedName = TryLiteral(query)
+        if not data then
+            -- Try swapping quotes (Double <-> Single)
+            local swapped = query:gsub('"', "\1"):gsub("'", '"'):gsub("\1", "'")
+            if swapped ~= query then
+                data, matchedName = TryLiteral(swapped)
+            end
+        end
+
+        -- Try cleaning escapes if present in query
+        if not data and query:find("\\") then
+            local clean = query:gsub("\\\"", '"'):gsub("\\'", "'")
+            if clean ~= query then
+                data, matchedName = TryLiteral(clean)
+            end
+        end
+
+        if data then
+            self:AppendResults(results, matchedName, data, seenPairs)
         end
     end
 
